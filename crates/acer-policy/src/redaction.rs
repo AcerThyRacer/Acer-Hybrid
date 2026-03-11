@@ -209,10 +209,23 @@ impl RedactionEngine {
             return (text.to_string(), redactions);
         }
 
+        // Filter out overlapping redactions
+        let mut filtered_redactions = Vec::new();
+        let mut last_end = 0;
+
+        for redaction in &redactions {
+            let start = redaction.position;
+            let end = start + redaction.original.len();
+            if start >= last_end {
+                filtered_redactions.push(redaction.clone());
+                last_end = end;
+            }
+        }
+
         let mut result = text.to_string();
 
         // Apply redactions in reverse order to maintain positions
-        for redaction in redactions.iter().rev() {
+        for redaction in filtered_redactions.iter().rev() {
             let start = redaction.position;
             let end = start + redaction.original.len();
             if end <= result.len() {
@@ -220,7 +233,7 @@ impl RedactionEngine {
             }
         }
 
-        (result, redactions)
+        (result, filtered_redactions)
     }
 
     /// Check if text contains sensitive data

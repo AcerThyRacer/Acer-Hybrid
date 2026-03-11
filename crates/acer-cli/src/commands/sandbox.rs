@@ -61,9 +61,12 @@ pub async fn run_command(
         .map(|dir| dir.path().to_path_buf())
         .unwrap_or(std::env::current_dir()?);
 
-    let output = Command::new("sh")
-        .arg("-lc")
-        .arg(command)
+    let parsed_args = shlex::split(command).unwrap_or_else(|| vec![command.to_string()]);
+    let mut cmd_iter = parsed_args.into_iter();
+    let bin = cmd_iter.next().unwrap_or_else(|| command.to_string());
+
+    let output = Command::new(bin)
+        .args(cmd_iter)
         .current_dir(&workdir)
         .output()?;
 

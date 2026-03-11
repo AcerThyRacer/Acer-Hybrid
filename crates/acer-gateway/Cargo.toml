@@ -20,3 +20,6 @@ tower-http.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
+ring.workspace = true
+subtle = "2.6.1"
+lru = "0.16.3"

@@ -42,7 +42,7 @@ pub struct GatewayMetrics {
 pub struct GatewayRateLimiter {
     max_requests: u64,
     window: Duration,
-    requests: VecDeque<Instant>,
+    requests: lru::LruCache<String, VecDeque<Instant>>,
 }
 
 impl GatewayRateLimiter {
@@ -50,25 +50,31 @@ impl GatewayRateLimiter {
         Self {
             max_requests,
             window,
-            requests: VecDeque::new(),
+            requests: lru::LruCache::new(std::num::NonZeroUsize::new(10000).unwrap()),
         }
     }
 
-    pub fn check(&mut self) -> bool {
+    pub fn check(&mut self, key: &str) -> bool {
         let now = Instant::now();
-        while self
-            .requests
+
+        if !self.requests.contains(key) {
+            self.requests.put(key.to_string(), VecDeque::new());
+        }
+
+        let client_requests = self.requests.get_mut(key).unwrap();
+
+        while client_requests
             .front()
             .is_some_and(|timestamp| now.duration_since(*timestamp) > self.window)
         {
-            self.requests.pop_front();
+            client_requests.pop_front();
         }
 
-        if self.requests.len() as u64 >= self.max_requests {
+        if client_requests.len() as u64 >= self.max_requests {
             return false;
         }
 
-        self.requests.push_back(now);
+        client_requests.push_back(now);
         true
     }
 }
@@ -117,13 +123,25 @@ pub fn is_authorized(state: &GatewayState, headers: &HeaderMap) -> bool {
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .map(|token| token == expected)
+        .map(|token| {
+            if token.len() != expected.len() {
+                false
+            } else {
+                subtle::ConstantTimeEq::ct_eq(token.as_bytes(), expected.as_bytes()).into()
+            }
+        })
         .unwrap_or(false);
 
     let api_key_ok = headers
         .get("x-api-key")
         .and_then(|value| value.to_str().ok())
-        .map(|token| token == expected)
+        .map(|token| {
+            if token.len() != expected.len() {
+                false
+            } else {
+                subtle::ConstantTimeEq::ct_eq(token.as_bytes(), expected.as_bytes()).into()
+            }
+        })
         .unwrap_or(false);
 
     bearer_ok || api_key_ok
