@@ -1,6 +1,6 @@
 //! Database schema for trace storage
 
-use acer_core::{ProviderType, RunId, RunRecord, TokenUsage, CostEntry};
+use acer_core::{CostEntry, ProviderType, RunId, RunRecord, TokenUsage};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -61,7 +61,7 @@ INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 "#;
 
 /// Run record for database storage
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct DbRunRecord {
     pub id: String,
     pub timestamp: String,
@@ -88,13 +88,17 @@ impl From<RunRecord> for DbRunRecord {
             model: run.model,
             provider: run.provider.to_string(),
             request_json: serde_json::to_string(&run.request).unwrap_or_default(),
-            response_json: run.response.map(|r| serde_json::to_string(&r).unwrap_or_default()),
+            response_json: run
+                .response
+                .map(|r| serde_json::to_string(&r).unwrap_or_default()),
             redactions_json: if run.redactions.is_empty() {
                 None
             } else {
                 serde_json::to_string(&run.redactions).ok()
             },
-            policy_decision_json: run.policy_decision.map(|p| serde_json::to_string(&p).unwrap_or_default()),
+            policy_decision_json: run
+                .policy_decision
+                .map(|p| serde_json::to_string(&p).unwrap_or_default()),
             cost_usd: run.cost_usd,
             latency_ms: run.latency_ms as i64,
             success: run.success,
@@ -113,7 +117,7 @@ impl TryInto<RunRecord> for DbRunRecord {
 
     fn try_into(self) -> std::result::Result<RunRecord, String> {
         Ok(RunRecord {
-            id: RunId::new(), // We lose the original ID here, but it's stored in the DB
+            id: RunId::from(self.id),
             timestamp: DateTime::parse_from_rfc3339(&self.timestamp)
                 .map(|dt| dt.with_timezone(&Utc))
                 .map_err(|e| format!("Invalid timestamp: {}", e))?,
@@ -128,16 +132,19 @@ impl TryInto<RunRecord> for DbRunRecord {
             },
             request: serde_json::from_str(&self.request_json)
                 .map_err(|e| format!("Invalid request JSON: {}", e))?,
-            response: self.response_json
+            response: self
+                .response_json
                 .map(|r| serde_json::from_str(&r))
                 .transpose()
                 .map_err(|e: serde_json::Error| format!("Invalid response JSON: {}", e))?,
-            redactions: self.redactions_json
+            redactions: self
+                .redactions_json
                 .map(|r| serde_json::from_str(&r))
                 .transpose()
                 .unwrap_or_default()
                 .unwrap_or_default(),
-            policy_decision: self.policy_decision_json
+            policy_decision: self
+                .policy_decision_json
                 .map(|p| serde_json::from_str(&p))
                 .transpose()
                 .map_err(|e: serde_json::Error| format!("Invalid policy decision JSON: {}", e))?,
@@ -145,7 +152,8 @@ impl TryInto<RunRecord> for DbRunRecord {
             latency_ms: self.latency_ms as u64,
             success: self.success,
             error: self.error,
-            metadata: self.metadata_json
+            metadata: self
+                .metadata_json
                 .map(|m| serde_json::from_str(&m))
                 .transpose()
                 .unwrap_or_default()
@@ -155,7 +163,7 @@ impl TryInto<RunRecord> for DbRunRecord {
 }
 
 /// Cost record for database storage
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct DbCostRecord {
     pub id: i64,
     pub timestamp: String,
@@ -188,7 +196,7 @@ impl From<DbCostRecord> for CostEntry {
                 total_tokens: record.total_tokens as usize,
             },
             cost_usd: record.cost_usd,
-            run_id: RunId::new(), // We lose the original ID
+            run_id: RunId::from(record.run_id),
         }
     }
 }

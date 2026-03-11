@@ -13,6 +13,8 @@ The command-line interface for interactive use:
 ```
 acer ask "prompt"     - Send a prompt to a model
 acer models           - List available models
+acer dashboard        - Live TUI observability
+acer sandbox -- ...   - Policy-enforced tool execution
 acer secrets          - Manage encrypted secrets
 acer policy           - Manage policies
 acer logs             - View trace logs
@@ -56,6 +58,7 @@ Security and compliance:
 - `PolicyEngine` - Rule evaluation
 - `PolicyRules` - Configuration structure
 - `RedactionEngine` - PII detection/removal
+- Project-aware tool and prompt controls
 
 ### 6. Secrets Vault (`acer-vault`)
 
@@ -71,6 +74,7 @@ SQLite-based audit logging:
 - Cost tracking
 - Usage statistics
 - Retention policies
+- Prompt cache/replay via prompt hashes
 
 ### 8. API Gateway (`acer-gateway`)
 
@@ -79,6 +83,22 @@ OpenAI-compatible HTTP server:
 - `GET /v1/models`
 - Policy enforcement
 - Automatic redaction
+- Structured trace logging
+- Browser dashboard at `/dashboard`
+- JSON stats and runs at `/api/stats` and `/api/runs`
+
+### 9. Plugin Layer
+
+Plugin manifests live in `~/.config/acer-hybrid/plugins`:
+- Provider plugins register OpenAI-compatible backends
+- Workflow plugins execute external commands inside workflow steps
+
+### 10. Policy Packs
+
+Shared governance packs live in `~/.config/acer-hybrid/policy-packs`:
+- Packs load as named profiles
+- The active profile is merged into runtime policy evaluation
+- Teams can version and distribute TOML packs
 
 ## Data Flow
 

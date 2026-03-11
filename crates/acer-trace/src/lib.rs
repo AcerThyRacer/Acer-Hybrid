@@ -1,7 +1,7 @@
 //! Trace store for Acer Hybrid
 
-mod store;
 mod schema;
+mod store;
 
-pub use store::TraceStore;
 pub use schema::*;
+pub use store::TraceStore;

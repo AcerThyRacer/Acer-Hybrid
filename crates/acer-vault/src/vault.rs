@@ -2,9 +2,12 @@
 
 use crate::EncryptionKey;
 use acer_core::{AcerError, Result};
+use base64::Engine;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use zeroize::Zeroize;
 
 /// A stored secret
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +23,8 @@ pub struct Secret {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretsVault {
     secrets: HashMap<String, Secret>,
+    #[serde(default = "default_salt")]
+    salt: String,
     #[serde(skip)]
     encryption_key: Option<EncryptionKey>,
     vault_path: PathBuf,
@@ -30,6 +35,7 @@ impl SecretsVault {
     pub fn new(vault_path: PathBuf) -> Self {
         Self {
             secrets: HashMap::new(),
+            salt: Self::generate_salt(),
             encryption_key: None,
             vault_path,
         }
@@ -58,7 +64,10 @@ impl SecretsVault {
 
     /// Unlock the vault with a password
     pub fn unlock(&mut self, password: &str) -> Result<()> {
-        self.encryption_key = Some(EncryptionKey::from_password(password, None));
+        let salt = base64::engine::general_purpose::STANDARD
+            .decode(&self.salt)
+            .map_err(|e| AcerError::Vault(format!("Invalid vault salt: {}", e)))?;
+        self.encryption_key = Some(EncryptionKey::from_password(password, Some(&salt)));
         Ok(())
     }
 
@@ -74,7 +83,9 @@ impl SecretsVault {
 
     /// Store a secret
     pub fn store(&mut self, key: &str, value: &str) -> Result<()> {
-        let encryption_key = self.encryption_key.as_ref()
+        let encryption_key = self
+            .encryption_key
+            .as_ref()
             .ok_or_else(|| AcerError::Vault("Vault is locked".to_string()))?;
 
         let encrypted = encryption_key.encrypt(value.as_bytes())?;
@@ -107,7 +118,9 @@ impl SecretsVault {
 
     /// Retrieve a secret
     pub fn get(&self, key: &str) -> Result<Option<String>> {
-        let encryption_key = self.encryption_key.as_ref()
+        let encryption_key = self
+            .encryption_key
+            .as_ref()
             .ok_or_else(|| AcerError::Vault("Vault is locked".to_string()))?;
 
         let secret = match self.secrets.get(key) {
@@ -119,10 +132,11 @@ impl SecretsVault {
             .decode(&secret.value)
             .map_err(|e| AcerError::Vault(format!("Failed to decode secret: {}", e)))?;
 
-        let decrypted = encryption_key.decrypt(&encrypted)?;
-        String::from_utf8(decrypted)
-            .map(Some)
-            .map_err(|e| AcerError::Vault(format!("Invalid UTF-8 in secret: {}", e)))
+        let mut decrypted = encryption_key.decrypt(&encrypted)?;
+        let value = String::from_utf8(decrypted.clone())
+            .map_err(|e| AcerError::Vault(format!("Invalid UTF-8 in secret: {}", e)))?;
+        decrypted.zeroize();
+        Ok(Some(value))
     }
 
     /// Delete a secret
@@ -165,7 +179,9 @@ impl SecretsVault {
 
     /// Rotate the encryption key
     pub fn rotate_key(&mut self, new_password: &str) -> Result<()> {
-        let old_key = self.encryption_key.as_ref()
+        let old_key = self
+            .encryption_key
+            .as_ref()
             .ok_or_else(|| AcerError::Vault("Vault is locked".to_string()))?;
 
         // Decrypt all secrets
@@ -174,31 +190,57 @@ impl SecretsVault {
             let encrypted = base64::engine::general_purpose::STANDARD
                 .decode(&secret.value)
                 .map_err(|e| AcerError::Vault(format!("Failed to decode secret: {}", e)))?;
-            let decrypted = old_key.decrypt(&encrypted)?;
-            let value = String::from_utf8(decrypted)
+            let mut decrypted = old_key.decrypt(&encrypted)?;
+            let value = String::from_utf8(decrypted.clone())
                 .map_err(|e| AcerError::Vault(format!("Invalid UTF-8 in secret: {}", e)))?;
+            decrypted.zeroize();
             decrypted_secrets.insert(key.clone(), value);
         }
 
         // Create new key
-        let new_key = EncryptionKey::from_password(new_password, None);
-        self.encryption_key = Some(new_key);
+        let mut new_salt = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut new_salt);
+        self.salt = base64::engine::general_purpose::STANDARD.encode(new_salt);
+        self.encryption_key = Some(EncryptionKey::from_password(new_password, Some(&new_salt)));
 
         // Re-encrypt all secrets
         let now = chrono::Utc::now();
-        for (key, value) in decrypted_secrets {
-            let encrypted = self.encryption_key.as_ref().unwrap().encrypt(value.as_bytes())?;
+        for (key, mut value) in decrypted_secrets {
+            let encrypted = self
+                .encryption_key
+                .as_ref()
+                .unwrap()
+                .encrypt(value.as_bytes())?;
             let encoded = base64::engine::general_purpose::STANDARD.encode(&encrypted);
-            
+
             if let Some(secret) = self.secrets.get_mut(&key) {
                 secret.value = encoded;
                 secret.updated_at = now;
             }
+            value.zeroize();
         }
 
         self.save()?;
         Ok(())
     }
+}
+
+impl Drop for SecretsVault {
+    fn drop(&mut self) {
+        self.lock();
+    }
+}
+
+impl SecretsVault {
+    fn generate_salt() -> String {
+        let mut salt = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut salt);
+        base64::engine::general_purpose::STANDARD.encode(salt)
+    }
+}
+
+fn default_salt() -> String {
+    SecretsVault::generate_salt()
 }
 
 /// Common secret keys
@@ -207,4 +249,18 @@ pub mod keys {
     pub const ANTHROPIC_API_KEY: &str = "anthropic_api_key";
     pub const GEMINI_API_KEY: &str = "gemini_api_key";
     pub const CUSTOM_API_KEY: &str = "custom_api_key";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lock_clears_unlock_state() {
+        let mut vault = SecretsVault::new(std::env::temp_dir().join("acer-vault-test.json"));
+        vault.unlock("test-password").expect("unlock");
+        assert!(vault.is_unlocked());
+        vault.lock();
+        assert!(!vault.is_unlocked());
+    }
 }

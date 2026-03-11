@@ -16,3 +16,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 dirs.workspace = true
 tracing.workspace = true
+chrono.workspace = true
+hex.workspace = true
+zeroize.workspace = true

@@ -1,16 +1,16 @@
 //! Encryption utilities using ring
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rand::RngCore;
-use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
+use ring::aead::{Aad, LessSafeKey, Nonce, Tag, UnboundKey, AES_256_GCM};
 use ring::digest::{digest, SHA256};
 use ring::pbkdf2;
 use std::num::NonZeroU32;
+use zeroize::Zeroize;
 
 /// Encryption key for the vault
 #[derive(Clone)]
 pub struct EncryptionKey {
-    key: LessSafeKey,
+    key_bytes: [u8; 32],
 }
 
 impl EncryptionKey {
@@ -31,37 +31,29 @@ impl EncryptionKey {
             &mut key_bytes,
         );
 
-        let unbound_key = UnboundKey::new(&AES_256_GCM, &key_bytes).unwrap();
-        Self {
-            key: LessSafeKey::new(unbound_key),
-        }
+        Self { key_bytes }
     }
 
     /// Generate a random encryption key
     pub fn generate() -> Self {
         let mut key_bytes = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut key_bytes);
-        
-        let unbound_key = UnboundKey::new(&AES_256_GCM, &key_bytes).unwrap();
-        Self {
-            key: LessSafeKey::new(unbound_key),
-        }
+
+        Self { key_bytes }
     }
 
     /// Encrypt data
-    pub fn encrypt(&self, plaintext: &[u8]) -> crate::Result<Vec<u8>> {
+    pub fn encrypt(&self, plaintext: &[u8]) -> acer_core::Result<Vec<u8>> {
         let mut nonce_bytes = [0u8; 12];
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::assume_unique_for_key(nonce_bytes);
 
         let mut ciphertext = plaintext.to_vec();
-        ciphertext.extend_from_slice(&[0u8; 16]); // Space for tag
-
-        self.key.seal_in_place_append_tag(
-            nonce,
-            Aad::empty(),
-            &mut ciphertext[..plaintext.len()],
-        ).map_err(|e| acer_core::AcerError::Vault(format!("Encryption failed: {}", e)))?;
+        let tag: Tag = self
+            .less_safe_key()?
+            .seal_in_place_separate_tag(nonce, Aad::empty(), &mut ciphertext)
+            .map_err(|e| acer_core::AcerError::Vault(format!("Encryption failed: {}", e)))?;
+        ciphertext.extend_from_slice(tag.as_ref());
 
         // Prepend nonce to ciphertext
         let mut result = nonce_bytes.to_vec();
@@ -70,9 +62,11 @@ impl EncryptionKey {
     }
 
     /// Decrypt data
-    pub fn decrypt(&self, ciphertext: &[u8]) -> crate::Result<Vec<u8>> {
+    pub fn decrypt(&self, ciphertext: &[u8]) -> acer_core::Result<Vec<u8>> {
         if ciphertext.len() < 12 + 16 {
-            return Err(acer_core::AcerError::Vault("Ciphertext too short".to_string()));
+            return Err(acer_core::AcerError::Vault(
+                "Ciphertext too short".to_string(),
+            ));
         }
 
         let nonce_bytes: [u8; 12] = ciphertext[..12]
@@ -81,7 +75,9 @@ impl EncryptionKey {
         let nonce = Nonce::assume_unique_for_key(nonce_bytes);
 
         let mut plaintext = ciphertext[12..].to_vec();
-        let plaintext_len = self.key.open_in_place(nonce, Aad::empty(), &mut plaintext)
+        let plaintext_len = self
+            .less_safe_key()?
+            .open_in_place(nonce, Aad::empty(), &mut plaintext)
             .map_err(|e| acer_core::AcerError::Vault(format!("Decryption failed: {}", e)))?
             .len();
 
@@ -94,6 +90,13 @@ impl EncryptionKey {
         let hash = digest(&SHA256, value.as_bytes());
         hex::encode(hash.as_ref())
     }
+
+    fn less_safe_key(&self) -> acer_core::Result<LessSafeKey> {
+        let unbound_key = UnboundKey::new(&AES_256_GCM, &self.key_bytes).map_err(|_| {
+            acer_core::AcerError::Vault("Invalid encryption key material".to_string())
+        })?;
+        Ok(LessSafeKey::new(unbound_key))
+    }
 }
 
 impl std::fmt::Debug for EncryptionKey {
@@ -101,5 +104,11 @@ impl std::fmt::Debug for EncryptionKey {
         f.debug_struct("EncryptionKey")
             .field("algorithm", &"AES-256-GCM")
             .finish_non_exhaustive()
+    }
+}
+
+impl Drop for EncryptionKey {
+    fn drop(&mut self) {
+        self.key_bytes.zeroize();
     }
 }

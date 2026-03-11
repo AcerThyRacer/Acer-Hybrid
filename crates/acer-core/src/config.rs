@@ -33,7 +33,7 @@ impl Default for AcerConfig {
 impl AcerConfig {
     pub fn load() -> crate::Result<Self> {
         let config_path = Self::config_path();
-        
+
         if !config_path.exists() {
             let config = Self::default();
             config.save()?;
@@ -47,7 +47,7 @@ impl AcerConfig {
 
     pub fn save(&self) -> crate::Result<()> {
         let config_path = Self::config_path();
-        
+
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -58,16 +58,30 @@ impl AcerConfig {
     }
 
     pub fn config_path() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
+        base_config_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("acer-hybrid")
             .join("config.toml")
     }
 
     pub fn data_dir() -> PathBuf {
-        dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
+        base_data_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("acer-hybrid")
+    }
+
+    pub fn plugins_dir() -> PathBuf {
+        Self::config_path()
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("plugins")
+    }
+
+    pub fn policy_packs_dir() -> PathBuf {
+        Self::config_path()
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("policy-packs")
     }
 }
 
@@ -81,7 +95,53 @@ pub struct ProvidersConfig {
     #[serde(default)]
     pub anthropic: AnthropicConfig,
     #[serde(default)]
+    pub gemini: GeminiConfig,
+    #[serde(default)]
     pub default_provider: Option<String>,
+    #[serde(default)]
+    pub http: ProviderHttpConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderHttpConfig {
+    #[serde(default = "default_request_timeout_secs")]
+    pub request_timeout_secs: u64,
+    #[serde(default = "default_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
+    #[serde(default = "default_max_idle_connections")]
+    pub max_idle_connections: usize,
+    #[serde(default = "default_pool_idle_timeout_secs")]
+    pub pool_idle_timeout_secs: u64,
+    #[serde(default = "default_retry_attempts")]
+    pub retry_attempts: u32,
+}
+
+fn default_request_timeout_secs() -> u64 {
+    60
+}
+fn default_connect_timeout_secs() -> u64 {
+    10
+}
+fn default_max_idle_connections() -> usize {
+    32
+}
+fn default_pool_idle_timeout_secs() -> u64 {
+    90
+}
+fn default_retry_attempts() -> u32 {
+    2
+}
+
+impl Default for ProviderHttpConfig {
+    fn default() -> Self {
+        Self {
+            request_timeout_secs: default_request_timeout_secs(),
+            connect_timeout_secs: default_connect_timeout_secs(),
+            max_idle_connections: default_max_idle_connections(),
+            pool_idle_timeout_secs: default_pool_idle_timeout_secs(),
+            retry_attempts: default_retry_attempts(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +185,14 @@ pub struct AnthropicConfig {
     pub default_model: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GeminiConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub default_model: Option<String>,
+}
+
 /// Policy configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PolicyConfig {
@@ -132,6 +200,10 @@ pub struct PolicyConfig {
     pub default: PolicyRules,
     #[serde(default)]
     pub projects: std::collections::HashMap<String, PolicyRules>,
+    #[serde(default)]
+    pub profiles: std::collections::HashMap<String, PolicyRules>,
+    #[serde(default)]
+    pub active_profile: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,8 +222,12 @@ pub struct PolicyRules {
     pub require_confirmation: bool,
 }
 
-fn default_max_cost() -> f64 { 0.10 }
-fn default_true() -> bool { true }
+fn default_max_cost() -> f64 {
+    0.10
+}
+fn default_true() -> bool {
+    true
+}
 
 impl Default for PolicyRules {
     fn default() -> Self {
@@ -175,10 +251,43 @@ pub struct GatewayConfig {
     pub port: u16,
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default = "default_gateway_rate_limit_requests")]
+    pub rate_limit_requests: u64,
+    #[serde(default = "default_gateway_rate_limit_window_secs")]
+    pub rate_limit_window_secs: u64,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub cors_allowed_origins: Vec<String>,
+    #[serde(default = "default_gateway_max_request_body_bytes")]
+    pub max_request_body_bytes: usize,
+    #[serde(default = "default_gateway_max_messages_per_request")]
+    pub max_messages_per_request: usize,
+    #[serde(default = "default_gateway_max_message_chars")]
+    pub max_message_chars: usize,
 }
 
-fn default_gateway_host() -> String { "127.0.0.1".to_string() }
-fn default_gateway_port() -> u16 { 8080 }
+fn default_gateway_host() -> String {
+    "127.0.0.1".to_string()
+}
+fn default_gateway_port() -> u16 {
+    8080
+}
+fn default_gateway_rate_limit_requests() -> u64 {
+    60
+}
+fn default_gateway_rate_limit_window_secs() -> u64 {
+    60
+}
+fn default_gateway_max_request_body_bytes() -> usize {
+    1024 * 1024
+}
+fn default_gateway_max_messages_per_request() -> usize {
+    128
+}
+fn default_gateway_max_message_chars() -> usize {
+    32 * 1024
+}
 
 impl Default for GatewayConfig {
     fn default() -> Self {
@@ -186,6 +295,13 @@ impl Default for GatewayConfig {
             host: default_gateway_host(),
             port: default_gateway_port(),
             enabled: true,
+            rate_limit_requests: default_gateway_rate_limit_requests(),
+            rate_limit_window_secs: default_gateway_rate_limit_window_secs(),
+            api_key_env: None,
+            cors_allowed_origins: Vec::new(),
+            max_request_body_bytes: default_gateway_max_request_body_bytes(),
+            max_messages_per_request: default_gateway_max_messages_per_request(),
+            max_message_chars: default_gateway_max_message_chars(),
         }
     }
 }
@@ -199,9 +315,16 @@ pub struct TracingConfig {
     pub database_path: Option<PathBuf>,
     #[serde(default = "default_retention_days")]
     pub retention_days: u32,
+    #[serde(default = "default_trace_max_connections")]
+    pub max_connections: u32,
 }
 
-fn default_retention_days() -> u32 { 30 }
+fn default_retention_days() -> u32 {
+    30
+}
+fn default_trace_max_connections() -> u32 {
+    5
+}
 
 impl Default for TracingConfig {
     fn default() -> Self {
@@ -209,6 +332,7 @@ impl Default for TracingConfig {
             enabled: true,
             database_path: None,
             retention_days: default_retention_days(),
+            max_connections: default_trace_max_connections(),
         }
     }
 }
@@ -229,4 +353,12 @@ impl Default for VaultConfig {
             vault_path: None,
         }
     }
+}
+
+fn base_config_dir() -> Option<PathBuf> {
+    dirs::config_dir().or_else(|| dirs::home_dir().map(|home| home.join(".config")))
+}
+
+fn base_data_dir() -> Option<PathBuf> {
+    dirs::data_dir().or_else(|| dirs::home_dir().map(|home| home.join(".local/share")))
 }

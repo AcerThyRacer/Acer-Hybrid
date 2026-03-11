@@ -1,14 +1,14 @@
 //! Policy engine for request validation and enforcement
 
-use crate::{PolicyRules, PolicyConfig, RedactionEngine};
+use crate::{PolicyConfig, PolicyRules, RedactionEngine};
 use acer_core::{AcerError, ModelRequest, PolicyDecision, Redaction, Result};
-use std::collections::HashMap;
 
 /// Policy engine
 pub struct PolicyEngine {
     config: PolicyConfig,
     redaction_engine: RedactionEngine,
     current_project: Option<String>,
+    current_profile: Option<String>,
 }
 
 impl Default for PolicyEngine {
@@ -23,6 +23,7 @@ impl PolicyEngine {
             config: PolicyConfig::default(),
             redaction_engine: RedactionEngine::new(),
             current_project: None,
+            current_profile: None,
         }
     }
 
@@ -32,6 +33,7 @@ impl PolicyEngine {
             config,
             redaction_engine: RedactionEngine::new(),
             current_project: None,
+            current_profile: None,
         }
     }
 
@@ -47,25 +49,42 @@ impl PolicyEngine {
         self.current_project = Some(project.to_string());
     }
 
+    /// Set active profile
+    pub fn set_profile(&mut self, profile: &str) {
+        self.current_profile = Some(profile.to_string());
+    }
+
     /// Get current rules (merged with project rules if applicable)
     pub fn current_rules(&self) -> PolicyRules {
-        match &self.current_project {
-            Some(project) => {
-                let project_rules = self.config.projects.get(project)
-                    .cloned()
-                    .unwrap_or_default();
-                self.config.default.merge(&project_rules)
+        let mut merged = self.config.default.clone();
+        if let Some(profile) = &self.current_profile {
+            if let Some(profile_rules) = self.config.profiles.get(profile) {
+                merged = merged.merge(profile_rules);
             }
-            None => self.config.default.clone(),
         }
+        if let Some(project) = &self.current_project {
+            if let Some(project_rules) = self.config.projects.get(project) {
+                merged = merged.merge(project_rules);
+            }
+        }
+        merged
     }
 
     /// Validate a request against policy
     pub fn validate(&self, request: &ModelRequest) -> Result<PolicyDecision> {
+        Ok(self.prepare_request(request)?.1)
+    }
+
+    /// Validate and return the policy-adjusted request.
+    pub fn prepare_request(
+        &self,
+        request: &ModelRequest,
+    ) -> Result<(ModelRequest, PolicyDecision)> {
         let rules = self.current_rules();
         let mut redactions = Vec::new();
         let mut allowed = true;
         let mut reason = None;
+        let mut prepared = request.clone();
 
         // Check model allowlist/blocklist
         if !rules.allowed_models.is_empty() {
@@ -85,7 +104,7 @@ impl PolicyEngine {
             for pattern in &rules.block_patterns {
                 let re = regex::Regex::new(pattern)
                     .map_err(|e| AcerError::PolicyViolation(format!("Invalid pattern: {}", e)))?;
-                
+
                 if re.is_match(&message.content) {
                     allowed = false;
                     reason = Some("Content matches blocked pattern".to_string());
@@ -96,8 +115,9 @@ impl PolicyEngine {
 
         // Apply redaction if enabled
         if rules.redact_pii && allowed {
-            for message in &request.messages {
-                let (_, msg_redactions) = self.redaction_engine.redact(&message.content);
+            for message in &mut prepared.messages {
+                let (redacted, msg_redactions) = self.redaction_engine.redact(&message.content);
+                message.content = redacted;
                 redactions.extend(msg_redactions);
             }
         }
@@ -106,18 +126,23 @@ impl PolicyEngine {
         if let Some(max_tokens) = rules.max_tokens {
             if request.max_tokens.map(|t| t > max_tokens).unwrap_or(false) {
                 allowed = false;
-                reason = Some(format!("Max tokens {} exceeds limit {}", 
-                    request.max_tokens.unwrap(), max_tokens));
+                reason = Some(format!(
+                    "Max tokens {} exceeds limit {}",
+                    request.max_tokens.unwrap(),
+                    max_tokens
+                ));
             }
         }
 
-        Ok(PolicyDecision {
+        let decision = PolicyDecision {
             allowed,
             reason,
             redactions,
             model_override: rules.default_model.clone(),
             cost_limit: Some(rules.max_cost_usd),
-        })
+        };
+
+        Ok((prepared, decision))
     }
 
     /// Validate a tool/command
@@ -135,9 +160,10 @@ impl PolicyEngine {
             });
         }
 
-        let allowed = rules.allow_tools.iter().any(|t| {
-            tool == t || tool.starts_with(&format!("{} ", t))
-        });
+        let allowed = rules
+            .allow_tools
+            .iter()
+            .any(|t| tool == t || tool.starts_with(&format!("{} ", t)));
 
         Ok(PolicyDecision {
             allowed,
@@ -201,5 +227,39 @@ impl PolicyEngine {
     /// List all projects with custom rules
     pub fn list_projects(&self) -> Vec<&String> {
         self.config.projects.keys().collect()
+    }
+
+    /// List configured profiles
+    pub fn list_profiles(&self) -> Vec<&String> {
+        self.config.profiles.keys().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PolicyRules;
+    use acer_core::{Message, ModelRequest};
+
+    #[test]
+    fn prepare_request_applies_redactions() {
+        let mut engine = PolicyEngine::new();
+        let mut rules = PolicyRules::default();
+        rules.redact_pii = true;
+        engine.update_default_rules(rules);
+
+        let request = ModelRequest {
+            model: "llama2".to_string(),
+            messages: vec![Message::user("email me at test@example.com")],
+            temperature: None,
+            max_tokens: None,
+            stream: None,
+        };
+
+        let (prepared, decision) = engine.prepare_request(&request).expect("policy prep");
+
+        assert!(decision.allowed);
+        assert!(!decision.redactions.is_empty());
+        assert_ne!(prepared.messages[0].content, request.messages[0].content);
     }
 }

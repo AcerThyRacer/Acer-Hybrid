@@ -1,7 +1,11 @@
 //! Google Gemini provider implementation
 
+use crate::http::{build_http_client, send_with_retries};
 use crate::Provider;
-use acer_core::{AcerError, Model, ModelRequest, ModelResponse, ProviderType, Result, TokenUsage};
+use acer_core::{
+    AcerError, Model, ModelRequest, ModelResponse, ProviderHttpConfig, ProviderType, Result,
+    TokenUsage,
+};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -11,13 +15,19 @@ use std::time::Instant;
 pub struct GeminiProvider {
     api_key: String,
     client: Client,
+    retry_attempts: u32,
 }
 
 impl GeminiProvider {
     pub fn new(api_key: String) -> Self {
+        Self::with_http_config(api_key, ProviderHttpConfig::default())
+    }
+
+    pub fn with_http_config(api_key: String, http_config: ProviderHttpConfig) -> Self {
         Self {
             api_key,
-            client: Client::new(),
+            client: build_http_client(&http_config),
+            retry_attempts: http_config.retry_attempts,
         }
     }
 }
@@ -68,7 +78,8 @@ impl Provider for GeminiProvider {
         struct GeminiRequest {
             contents: Vec<GeminiContent>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            generationConfig: Option<GeminiConfig>,
+            #[serde(rename = "generationConfig")]
+            generation_config: Option<GeminiConfig>,
         }
 
         #[derive(Serialize)]
@@ -87,10 +98,13 @@ impl Provider for GeminiProvider {
             #[serde(skip_serializing_if = "Option::is_none")]
             temperature: Option<f32>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            maxOutputTokens: Option<usize>,
+            #[serde(rename = "maxOutputTokens")]
+            max_output_tokens: Option<usize>,
         }
 
-        let contents: Vec<GeminiContent> = request.messages.into_iter()
+        let contents: Vec<GeminiContent> = request
+            .messages
+            .into_iter()
             .map(|m| GeminiContent {
                 parts: vec![GeminiPart { text: m.content }],
                 role: match m.role {
@@ -98,13 +112,14 @@ impl Provider for GeminiProvider {
                     acer_core::MessageRole::Assistant => "model".to_string(),
                     _ => "user".to_string(),
                 },
-            }).collect();
+            })
+            .collect();
 
         let gemini_request = GeminiRequest {
             contents,
-            generationConfig: Some(GeminiConfig {
+            generation_config: Some(GeminiConfig {
                 temperature: request.temperature,
-                maxOutputTokens: request.max_tokens,
+                max_output_tokens: request.max_tokens,
             }),
         };
 
@@ -113,29 +128,39 @@ impl Provider for GeminiProvider {
             request.model, self.api_key
         );
 
-        let response = self.client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .json(&gemini_request)
-            .send()
-            .await
-            .map_err(|e| AcerError::Http(e.to_string()))?;
+        let response = send_with_retries(
+            || {
+                self.client
+                    .post(&url)
+                    .header("Content-Type", "application/json")
+                    .json(&gemini_request)
+            },
+            self.retry_attempts,
+            "Gemini completion",
+        )
+        .await?;
 
         if !response.status().is_success() {
+            let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(AcerError::Provider(format!("Gemini error: {}", error_text)));
+            return Err(AcerError::Provider(format!(
+                "Gemini completion failed with status {}: {}",
+                status, error_text
+            )));
         }
 
         #[derive(Deserialize)]
         struct GeminiResponse {
             candidates: Vec<GeminiCandidate>,
-            usageMetadata: Option<GeminiUsage>,
+            #[serde(rename = "usageMetadata")]
+            usage_metadata: Option<GeminiUsage>,
         }
 
         #[derive(Deserialize)]
         struct GeminiCandidate {
             content: GeminiResponseContent,
-            finishReason: Option<String>,
+            #[serde(rename = "finishReason")]
+            finish_reason: Option<String>,
         }
 
         #[derive(Deserialize)]
@@ -150,9 +175,12 @@ impl Provider for GeminiProvider {
 
         #[derive(Deserialize)]
         struct GeminiUsage {
-            promptTokenCount: usize,
-            candidatesTokenCount: usize,
-            totalTokenCount: usize,
+            #[serde(rename = "promptTokenCount")]
+            prompt_token_count: usize,
+            #[serde(rename = "candidatesTokenCount")]
+            candidates_token_count: usize,
+            #[serde(rename = "totalTokenCount")]
+            total_token_count: usize,
         }
 
         let data: GeminiResponse = response
@@ -160,16 +188,17 @@ impl Provider for GeminiProvider {
             .await
             .map_err(|e| AcerError::Http(e.to_string()))?;
 
-        let content = data.candidates
+        let content = data
+            .candidates
             .first()
             .and_then(|c| c.content.parts.first())
             .and_then(|p| p.text.clone())
             .unwrap_or_default();
 
-        let usage = data.usageMetadata.unwrap_or(GeminiUsage {
-            promptTokenCount: 0,
-            candidatesTokenCount: 0,
-            totalTokenCount: 0,
+        let usage = data.usage_metadata.unwrap_or(GeminiUsage {
+            prompt_token_count: 0,
+            candidates_token_count: 0,
+            total_token_count: 0,
         });
 
         Ok(ModelResponse {
@@ -177,13 +206,16 @@ impl Provider for GeminiProvider {
             model: request.model,
             content,
             usage: TokenUsage {
-                prompt_tokens: usage.promptTokenCount,
-                completion_tokens: usage.candidatesTokenCount,
-                total_tokens: usage.totalTokenCount,
+                prompt_tokens: usage.prompt_token_count,
+                completion_tokens: usage.candidates_token_count,
+                total_tokens: usage.total_token_count,
             },
             latency_ms: start.elapsed().as_millis() as u64,
             provider: ProviderType::Gemini,
-            finish_reason: data.candidates.first().and_then(|c| c.finishReason.clone()),
+            finish_reason: data
+                .candidates
+                .first()
+                .and_then(|c| c.finish_reason.clone()),
         })
     }
 

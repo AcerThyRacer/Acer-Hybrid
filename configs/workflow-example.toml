@@ -6,6 +6,7 @@ description = "Scan code for secrets and get AI review"
 name = "scan_secrets"
 type = "command"
 command = "git diff HEAD~1"
+isolated = true
 
 [[steps]]
 name = "redact_sensitive"
@@ -16,6 +17,7 @@ patterns = ["api_key", "secret", "password"]
 name = "send_to_model"
 type = "llm"
 model = "llama2"
+cache = true
 prompt = """
 Review this code diff for:
 1. Security issues

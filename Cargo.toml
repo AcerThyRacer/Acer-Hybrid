@@ -60,6 +60,7 @@ hex = "0.4"
 dirs = "5.0"
 async-trait = "0.1"
 regex = "1.10"
+zeroize = "1.8"
 
 # Internal crates
 acer-core = { path = "crates/acer-core" }

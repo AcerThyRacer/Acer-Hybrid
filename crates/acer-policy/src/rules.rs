@@ -20,54 +20,58 @@ pub struct PolicyRules {
     /// Maximum cost per request in USD
     #[serde(default = "default_max_cost")]
     pub max_cost_usd: f64,
-    
+
     /// Allow remote (cloud) providers
     #[serde(default = "default_true")]
     pub allow_remote: bool,
-    
+
     /// Redact PII before sending to models
     #[serde(default = "default_true")]
     pub redact_pii: bool,
-    
+
     /// Allowed tools for agent mode
     #[serde(default)]
     pub allow_tools: Vec<String>,
-    
+
     /// Blocked patterns (regex)
     #[serde(default)]
     pub block_patterns: Vec<String>,
-    
+
     /// Require confirmation for dangerous actions
     #[serde(default)]
     pub require_confirmation: bool,
-    
+
     /// Allowed models (empty = all allowed)
     #[serde(default)]
     pub allowed_models: Vec<String>,
-    
+
     /// Blocked models
     #[serde(default)]
     pub blocked_models: Vec<String>,
-    
+
     /// Maximum tokens per request
     #[serde(default)]
     pub max_tokens: Option<usize>,
-    
+
     /// Default model to use
     #[serde(default)]
     pub default_model: Option<String>,
-    
+
     /// Enable audit logging
     #[serde(default = "default_true")]
     pub audit_logging: bool,
-    
+
     /// Custom metadata
     #[serde(default)]
     pub metadata: HashMap<String, String>,
 }
 
-fn default_max_cost() -> f64 { 0.10 }
-fn default_true() -> bool { true }
+fn default_max_cost() -> f64 {
+    0.10
+}
+fn default_true() -> bool {
+    true
+}
 
 impl Default for PolicyRules {
     fn default() -> Self {
@@ -142,6 +146,43 @@ impl PolicyRules {
                 m.extend(other.metadata.clone());
                 m
             },
+        }
+    }
+}
+
+impl From<acer_core::config::PolicyRules> for PolicyRules {
+    fn from(value: acer_core::config::PolicyRules) -> Self {
+        Self {
+            max_cost_usd: value.max_cost_usd,
+            allow_remote: value.allow_remote,
+            redact_pii: value.redact_pii,
+            allow_tools: value.allow_tools,
+            block_patterns: value.block_patterns,
+            require_confirmation: value.require_confirmation,
+            allowed_models: Vec::new(),
+            blocked_models: Vec::new(),
+            max_tokens: None,
+            default_model: None,
+            audit_logging: true,
+            metadata: HashMap::new(),
+        }
+    }
+}
+
+impl From<acer_core::config::PolicyConfig> for PolicyConfig {
+    fn from(value: acer_core::config::PolicyConfig) -> Self {
+        Self {
+            default: value.default.into(),
+            projects: value
+                .projects
+                .into_iter()
+                .map(|(name, rules)| (name, rules.into()))
+                .collect(),
+            profiles: value
+                .profiles
+                .into_iter()
+                .map(|(name, rules)| (name, rules.into()))
+                .collect(),
         }
     }
 }

@@ -1,7 +1,11 @@
 //! Custom provider implementation for user-defined endpoints
 
+use crate::http::{build_http_client, send_with_retries};
 use crate::Provider;
-use acer_core::{AcerError, Model, ModelRequest, ModelResponse, ProviderType, Result, TokenUsage};
+use acer_core::{
+    AcerError, Model, ModelRequest, ModelResponse, ProviderHttpConfig, ProviderType, Result,
+    TokenUsage,
+};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -13,15 +17,26 @@ pub struct CustomProvider {
     base_url: String,
     api_key: Option<String>,
     client: Client,
+    retry_attempts: u32,
 }
 
 impl CustomProvider {
     pub fn new(name: String, base_url: String, api_key: Option<String>) -> Self {
+        Self::with_http_config(name, base_url, api_key, ProviderHttpConfig::default())
+    }
+
+    pub fn with_http_config(
+        name: String,
+        base_url: String,
+        api_key: Option<String>,
+        http_config: ProviderHttpConfig,
+    ) -> Self {
         Self {
             name,
             base_url,
             api_key,
-            client: Client::new(),
+            client: build_http_client(&http_config),
+            retry_attempts: http_config.retry_attempts,
         }
     }
 }
@@ -43,16 +58,19 @@ impl Provider for CustomProvider {
 
     async fn list_models(&self) -> Result<Vec<Model>> {
         // Try OpenAI-compatible endpoint
-        let mut request = self.client.get(format!("{}/models", self.base_url));
-        
-        if let Some(ref api_key) = self.api_key {
-            request = request.header("Authorization", format!("Bearer {}", api_key));
-        }
-
-        let response = request
-            .send()
-            .await
-            .map_err(|e| AcerError::Http(e.to_string()))?;
+        let response = send_with_retries(
+            || {
+                let request = self.client.get(format!("{}/models", self.base_url));
+                if let Some(ref api_key) = self.api_key {
+                    request.header("Authorization", format!("Bearer {}", api_key))
+                } else {
+                    request
+                }
+            },
+            self.retry_attempts,
+            "Custom provider list models",
+        )
+        .await?;
 
         if !response.status().is_success() {
             return Ok(Vec::new());
@@ -73,14 +91,18 @@ impl Provider for CustomProvider {
             .await
             .map_err(|e| AcerError::Http(e.to_string()))?;
 
-        Ok(data.data.into_iter().map(|m| Model {
-            id: m.id.clone(),
-            name: m.id,
-            provider: ProviderType::Custom,
-            is_local: false,
-            context_window: None,
-            cost_per_1k_tokens: None,
-        }).collect())
+        Ok(data
+            .data
+            .into_iter()
+            .map(|m| Model {
+                id: m.id.clone(),
+                name: m.id,
+                provider: ProviderType::Custom,
+                is_local: false,
+                context_window: None,
+                cost_per_1k_tokens: None,
+            })
+            .collect())
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {
@@ -105,36 +127,49 @@ impl Provider for CustomProvider {
 
         let chat_request = ChatRequest {
             model: request.model.clone(),
-            messages: request.messages.into_iter().map(|m| ChatMessage {
-                role: match m.role {
-                    acer_core::MessageRole::System => "system".to_string(),
-                    acer_core::MessageRole::User => "user".to_string(),
-                    acer_core::MessageRole::Assistant => "assistant".to_string(),
-                    acer_core::MessageRole::Tool => "tool".to_string(),
-                },
-                content: m.content,
-            }).collect(),
+            messages: request
+                .messages
+                .into_iter()
+                .map(|m| ChatMessage {
+                    role: match m.role {
+                        acer_core::MessageRole::System => "system".to_string(),
+                        acer_core::MessageRole::User => "user".to_string(),
+                        acer_core::MessageRole::Assistant => "assistant".to_string(),
+                        acer_core::MessageRole::Tool => "tool".to_string(),
+                    },
+                    content: m.content,
+                })
+                .collect(),
             temperature: request.temperature,
             max_tokens: request.max_tokens,
         };
 
-        let mut request_builder = self.client
-            .post(format!("{}/chat/completions", self.base_url))
-            .header("Content-Type", "application/json")
-            .json(&chat_request);
+        let response = send_with_retries(
+            || {
+                let request = self
+                    .client
+                    .post(format!("{}/chat/completions", self.base_url))
+                    .header("Content-Type", "application/json")
+                    .json(&chat_request);
 
-        if let Some(ref api_key) = self.api_key {
-            request_builder = request_builder.header("Authorization", format!("Bearer {}", api_key));
-        }
-
-        let response = request_builder
-            .send()
-            .await
-            .map_err(|e| AcerError::Http(e.to_string()))?;
+                if let Some(ref api_key) = self.api_key {
+                    request.header("Authorization", format!("Bearer {}", api_key))
+                } else {
+                    request
+                }
+            },
+            self.retry_attempts,
+            "Custom provider completion",
+        )
+        .await?;
 
         if !response.status().is_success() {
+            let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(AcerError::Provider(format!("Custom provider error: {}", error_text)));
+            return Err(AcerError::Provider(format!(
+                "Custom provider completion failed with status {}: {}",
+                status, error_text
+            )));
         }
 
         #[derive(Deserialize)]
@@ -168,7 +203,8 @@ impl Provider for CustomProvider {
             .await
             .map_err(|e| AcerError::Http(e.to_string()))?;
 
-        let content = data.choices
+        let content = data
+            .choices
             .first()
             .and_then(|c| c.message.content.clone())
             .unwrap_or_default();

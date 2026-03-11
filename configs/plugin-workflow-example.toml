@@ -1,0 +1,6 @@
+name = "markdown-postprocess"
+type = "workflow"
+description = "Example workflow plugin"
+
+[workflow]
+command = "python ./scripts/markdown_postprocess.py"

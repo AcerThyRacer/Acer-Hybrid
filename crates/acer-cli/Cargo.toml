@@ -9,6 +9,10 @@ authors.workspace = true
 name = "acer"
 path = "src/main.rs"
 
+[[bin]]
+name = "hybrid"
+path = "src/main.rs"
+
 [dependencies]
 acer-core.workspace = true
 acer-provider.workspace = true
@@ -28,3 +32,7 @@ tracing-subscriber.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 rpassword = "7.3"
+serde_yaml = "0.9"
+ratatui = "0.29"
+crossterm = "0.28"
+tempfile = "3.14"

@@ -1,7 +1,9 @@
 //! Model router for intelligent request routing
 
-use crate::{Provider, ProviderConfig, ProviderFactory, OllamaProvider, OpenAIProvider};
-use acer_core::{AcerError, Model, ModelRequest, ModelResponse, PolicyDecision, ProviderType, Result};
+use crate::Provider;
+use acer_core::{
+    AcerError, Model, ModelRequest, ModelResponse, PolicyDecision, ProviderType, Result,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -31,37 +33,65 @@ impl ModelRouter {
         self.default_provider = name.to_string();
     }
 
-    /// Get a provider by name
-    pub async fn get_provider(&self, name: &str) -> Result<Option<String>> {
+    /// Resolve the registered provider name for an identifier or prefixed model.
+    pub async fn resolve_provider_name(&self, name: &str) -> Option<String> {
         let providers = self.providers.read().await;
-        
+
         if providers.contains_key(name) {
-            return Ok(Some(name.to_string()));
+            return Some(name.to_string());
         }
 
         // Try to find by model prefix
         for provider_name in providers.keys() {
             if name.starts_with(provider_name) {
-                return Ok(Some(provider_name.clone()));
+                return Some(provider_name.clone());
             }
         }
 
-        Ok(None)
+        None
     }
 
     /// Route a request to the appropriate provider
-    pub async fn route(&self, request: ModelRequest, policy: Option<&PolicyDecision>) -> Result<ModelResponse> {
+    pub async fn route(
+        &self,
+        request: ModelRequest,
+        policy: Option<&PolicyDecision>,
+    ) -> Result<ModelResponse> {
+        if self.providers.read().await.is_empty() {
+            return Err(AcerError::Provider(
+                "No providers are registered. Configure at least one provider before sending requests."
+                    .to_string(),
+            ));
+        }
+
         let provider_name = self.determine_provider(&request.model, policy).await?;
-        
+        let mut request = request;
+
+        if let Some(policy) = policy {
+            if let Some(override_model) = &policy.model_override {
+                request.model = override_model.clone();
+            }
+        }
+
+        let prefix = format!("{}:", provider_name);
+        if request.model.starts_with(&prefix) {
+            request.model = request.model[prefix.len()..].to_string();
+        }
+
         let providers = self.providers.read().await;
-        let provider = providers.get(&provider_name)
+        let provider = providers
+            .get(&provider_name)
             .ok_or_else(|| AcerError::Provider(format!("Provider not found: {}", provider_name)))?;
 
         provider.complete(request).await
     }
 
     /// Determine which provider to use for a model
-    async fn determine_provider(&self, model: &str, policy: Option<&PolicyDecision>) -> Result<String> {
+    async fn determine_provider(
+        &self,
+        model: &str,
+        policy: Option<&PolicyDecision>,
+    ) -> Result<String> {
         let providers = self.providers.read().await;
 
         // Check for explicit model override from policy
@@ -69,6 +99,9 @@ impl ModelRouter {
             if let Some(ref override_model) = policy.model_override {
                 // Find provider for the override model
                 for (name, provider) in providers.iter() {
+                    if !provider.is_available().await {
+                        continue;
+                    }
                     let models = provider.list_models().await?;
                     if models.iter().any(|m| m.id == *override_model) {
                         return Ok(name.clone());
@@ -87,6 +120,9 @@ impl ModelRouter {
 
         // Try to find provider that has this model
         for (name, provider) in providers.iter() {
+            if !provider.is_available().await {
+                continue;
+            }
             let models = provider.list_models().await?;
             if models.iter().any(|m| m.id == model || m.name == model) {
                 return Ok(name.clone());
@@ -94,12 +130,31 @@ impl ModelRouter {
         }
 
         // Fall back to default
-        Ok(self.default_provider.clone())
+        if let Some(default_provider) = providers.get(&self.default_provider) {
+            if default_provider.is_available().await {
+                return Ok(self.default_provider.clone());
+            }
+        }
+
+        for (name, provider) in providers.iter() {
+            if provider.is_available().await {
+                return Ok(name.clone());
+            }
+        }
+
+        Err(AcerError::Provider(
+            "No available providers matched the request.".to_string(),
+        ))
     }
 
     /// List all available models across all providers
     pub async fn list_all_models(&self) -> Result<Vec<Model>> {
         let providers = self.providers.read().await;
+        if providers.is_empty() {
+            return Err(AcerError::Provider(
+                "No providers are registered, so no models are available.".to_string(),
+            ));
+        }
         let mut all_models = Vec::new();
 
         for provider in providers.values() {
@@ -107,6 +162,12 @@ impl ModelRouter {
                 Ok(models) => all_models.extend(models),
                 Err(e) => tracing::warn!("Failed to list models for provider: {}", e),
             }
+        }
+
+        if all_models.is_empty() {
+            return Err(AcerError::ModelNotFound(
+                "No models were returned by the configured providers.".to_string(),
+            ));
         }
 
         Ok(all_models)
@@ -123,6 +184,36 @@ impl ModelRouter {
         }
 
         availability
+    }
+
+    pub async fn provider_count(&self) -> usize {
+        self.providers.read().await.len()
+    }
+
+    pub async fn estimate_cost(&self, response: &ModelResponse) -> Option<f64> {
+        let providers = self.providers.read().await;
+        for provider in providers.values() {
+            if provider.provider_type() != response.provider {
+                continue;
+            }
+
+            if let Ok(models) = provider.list_models().await {
+                if let Some(model) = models
+                    .iter()
+                    .find(|model| model.id == response.model || model.name == response.model)
+                {
+                    if let Some(cost_per_1k) = model.cost_per_1k_tokens {
+                        return Some((response.usage.total_tokens as f64 / 1000.0) * cost_per_1k);
+                    }
+                }
+            }
+        }
+
+        if response.provider == ProviderType::Ollama {
+            return Some(0.0);
+        }
+
+        None
     }
 }
 

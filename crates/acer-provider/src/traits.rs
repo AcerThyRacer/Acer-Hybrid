@@ -1,6 +1,6 @@
 //! Provider trait definitions
 
-use acer_core::{AcerError, Message, Model, ModelRequest, ModelResponse, ProviderType, Result};
+use acer_core::{AcerError, Model, ModelRequest, ModelResponse, ProviderType, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
 
@@ -33,11 +33,23 @@ pub struct ProviderFactory {
 
 #[derive(Debug, Clone)]
 pub enum ProviderConfig {
-    Ollama { base_url: String },
-    OpenAI { api_key: String },
-    Anthropic { api_key: String },
-    Gemini { api_key: String },
-    Custom { name: String, base_url: String, api_key: Option<String> },
+    Ollama {
+        base_url: String,
+    },
+    OpenAI {
+        api_key: String,
+    },
+    Anthropic {
+        api_key: String,
+    },
+    Gemini {
+        api_key: String,
+    },
+    Custom {
+        name: String,
+        base_url: String,
+        api_key: Option<String>,
+    },
 }
 
 impl ProviderFactory {
@@ -52,7 +64,9 @@ impl ProviderFactory {
     }
 
     pub fn create(&self, name: &str) -> Result<Box<dyn Provider>> {
-        let config = self.configs.get(name)
+        let config = self
+            .configs
+            .get(name)
             .ok_or_else(|| AcerError::Provider(format!("Unknown provider: {}", name)))?;
 
         match config {
@@ -68,13 +82,15 @@ impl ProviderFactory {
             ProviderConfig::Gemini { api_key } => {
                 Ok(Box::new(super::GeminiProvider::new(api_key.clone())))
             }
-            ProviderConfig::Custom { name, base_url, api_key } => {
-                Ok(Box::new(super::CustomProvider::new(
-                    name.clone(),
-                    base_url.clone(),
-                    api_key.clone(),
-                )))
-            }
+            ProviderConfig::Custom {
+                name,
+                base_url,
+                api_key,
+            } => Ok(Box::new(super::CustomProvider::new(
+                name.clone(),
+                base_url.clone(),
+                api_key.clone(),
+            ))),
         }
     }
 }

@@ -1,13 +1,13 @@
 //! Provider implementations
 
+mod anthropic;
+mod custom;
+mod gemini;
 mod ollama;
 mod openai;
-mod anthropic;
-mod gemini;
-mod custom;
 
+pub use anthropic::AnthropicProvider;
+pub use custom::CustomProvider;
+pub use gemini::GeminiProvider;
 pub use ollama::OllamaProvider;
 pub use openai::OpenAIProvider;
-pub use anthropic::AnthropicProvider;
-pub use gemini::GeminiProvider;
-pub use custom::CustomProvider;

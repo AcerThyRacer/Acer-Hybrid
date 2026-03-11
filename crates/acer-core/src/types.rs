@@ -16,6 +16,10 @@ impl RunId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn from_string(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
 }
 
 impl Default for RunId {
@@ -27,6 +31,18 @@ impl Default for RunId {
 impl std::fmt::Display for RunId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl From<String> for RunId {
+    fn from(value: String) -> Self {
+        Self::from_string(value)
+    }
+}
+
+impl From<&str> for RunId {
+    fn from(value: &str) -> Self {
+        Self::from_string(value)
     }
 }
 
@@ -183,7 +199,7 @@ pub struct RunRecord {
 impl RunRecord {
     pub fn new(request: ModelRequest) -> Self {
         use sha2::{Digest, Sha256};
-        
+
         let prompt_hash = {
             let mut hasher = Sha256::new();
             for msg in &request.messages {

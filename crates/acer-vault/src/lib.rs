@@ -1,7 +1,7 @@
 //! Encrypted secrets vault for Acer Hybrid
 
-mod vault;
 mod encryption;
+mod vault;
 
-pub use vault::SecretsVault;
 pub use encryption::EncryptionKey;
+pub use vault::{keys, SecretsVault};

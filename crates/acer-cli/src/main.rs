@@ -1,17 +1,18 @@
 //! Acer Hybrid CLI - Local-first AI operations platform
 
 mod commands;
+mod plugins;
+mod runtime;
 
 use clap::{Parser, Subcommand};
-use commands::*;
 
 #[derive(Parser)]
-#[command(name = "acer")]
+#[command(name = env!("CARGO_BIN_NAME"))]
 #[command(about = "Acer Hybrid - Local-first AI operations platform", long_about = None)]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -35,6 +36,12 @@ enum Commands {
         /// Attach files for context
         #[arg(short, long)]
         attach: Option<String>,
+        /// Reuse a cached response for identical prompts and models when available
+        #[arg(long)]
+        cache: bool,
+        /// Apply project-specific policy rules
+        #[arg(long)]
+        project: Option<String>,
         /// Enable verbose output
         #[arg(short, long)]
         verbose: bool,
@@ -91,6 +98,15 @@ enum Commands {
         /// Show full request/response
         #[arg(long)]
         full: bool,
+        /// Replay the stored request through the active runtime
+        #[arg(long)]
+        replay: bool,
+        /// Diff this run against another run ID
+        #[arg(long)]
+        diff_with: Option<String>,
+        /// Export this run or the trace database to a file path (.json or .db)
+        #[arg(long)]
+        export: Option<String>,
     },
 
     /// Run a workflow
@@ -100,6 +116,9 @@ enum Commands {
         /// Input variables (key=value)
         #[arg(short, long)]
         var: Vec<String>,
+        /// Apply project-specific policy rules during execution
+        #[arg(long)]
+        project: Option<String>,
     },
 
     /// Start the local API gateway
@@ -133,6 +152,47 @@ enum Commands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+    },
+
+    /// Open the terminal dashboard
+    Dashboard {
+        /// Refresh interval in milliseconds
+        #[arg(long, default_value = "1500")]
+        refresh_ms: u64,
+    },
+
+    /// Benchmark multiple models against the same prompt
+    Benchmark {
+        /// Prompt text to run
+        prompt: String,
+        /// Models to compare
+        #[arg(long, required = true)]
+        model: Vec<String>,
+        /// Number of repetitions per model
+        #[arg(long, default_value = "1")]
+        repeat: usize,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Manage Acer Hybrid plugins
+    Plugins {
+        #[command(subcommand)]
+        command: PluginCommands,
+    },
+
+    /// Run a command inside Acer Hybrid's policy sandbox
+    Sandbox {
+        /// Use an isolated temporary working directory
+        #[arg(long)]
+        isolated: bool,
+        /// Apply project-specific tool policy rules
+        #[arg(long)]
+        project: Option<String>,
+        /// Command to execute
+        #[arg(required = true, trailing_var_arg = true)]
+        cmd: Vec<String>,
     },
 
     /// Initialize configuration
@@ -206,6 +266,27 @@ enum PolicyCommands {
         /// Prompt to test
         prompt: String,
     },
+    /// List available policy packs
+    Packs,
+    /// Activate a policy profile or pack
+    Activate {
+        /// Profile or pack name
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PluginCommands {
+    /// List installed plugins
+    List,
+    /// Create starter plugin manifests
+    Scaffold {
+        /// Plugin name
+        name: String,
+        /// Plugin type (provider or workflow)
+        #[arg(long, default_value = "provider")]
+        plugin_type: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -249,50 +330,117 @@ enum ConfigCommands {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()
-            .add_directive(tracing::Level::INFO.into()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into()),
+        )
         .init();
 
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Ask { prompt, model, provider, temperature, max_tokens, attach, verbose } => {
-            commands::ask::execute(prompt, model, provider, temperature, max_tokens, attach, verbose).await?;
+        None => {
+            commands::dashboard::execute(1500).await?;
         }
-        Commands::Models { provider, local, json } => {
+        Some(Commands::Ask {
+            prompt,
+            model,
+            provider,
+            temperature,
+            max_tokens,
+            attach,
+            cache,
+            project,
+            verbose,
+        }) => {
+            commands::ask::execute(
+                prompt,
+                model,
+                provider,
+                temperature,
+                max_tokens,
+                attach,
+                cache,
+                project,
+                verbose,
+            )
+            .await?;
+        }
+        Some(Commands::Models {
+            provider,
+            local,
+            json,
+        }) => {
             commands::models::execute(provider, local, json).await?;
         }
-        Commands::Secrets { command } => {
+        Some(Commands::Secrets { command }) => {
             commands::secrets::execute(command).await?;
         }
-        Commands::Policy { command } => {
+        Some(Commands::Policy { command }) => {
             commands::policy::execute(command).await?;
         }
-        Commands::Logs { limit, model, provider, errors, json } => {
+        Some(Commands::Logs {
+            limit,
+            model,
+            provider,
+            errors,
+            json,
+        }) => {
             commands::logs::execute(limit, model, provider, errors, json).await?;
         }
-        Commands::Trace { run_id, full } => {
-            commands::trace::execute(run_id, full).await?;
+        Some(Commands::Trace {
+            run_id,
+            full,
+            replay,
+            diff_with,
+            export,
+        }) => {
+            commands::trace::execute(run_id, full, replay, diff_with, export).await?;
         }
-        Commands::Run { workflow, var } => {
-            commands::workflow::execute(workflow, var).await?;
+        Some(Commands::Run {
+            workflow,
+            var,
+            project,
+        }) => {
+            commands::workflow::execute(workflow, var, project).await?;
         }
-        Commands::Gateway { port, host } => {
+        Some(Commands::Gateway { port, host }) => {
             commands::gateway::execute(host, port).await?;
         }
-        Commands::Daemon { command } => {
+        Some(Commands::Daemon { command }) => {
             commands::daemon::execute(command).await?;
         }
-        Commands::Doctor { fix } => {
+        Some(Commands::Doctor { fix }) => {
             commands::doctor::execute(fix).await?;
         }
-        Commands::Stats { period, json } => {
+        Some(Commands::Stats { period, json }) => {
             commands::stats::execute(period, json).await?;
         }
-        Commands::Init { force } => {
+        Some(Commands::Benchmark {
+            prompt,
+            model,
+            repeat,
+            json,
+        }) => {
+            commands::benchmark::execute(prompt, model, repeat, json).await?;
+        }
+        Some(Commands::Plugins { command }) => {
+            commands::plugins::execute(command).await?;
+        }
+        Some(Commands::Dashboard { refresh_ms }) => {
+            commands::dashboard::execute(refresh_ms).await?;
+        }
+        Some(Commands::Sandbox {
+            isolated,
+            project,
+            cmd,
+        }) => {
+            commands::sandbox::execute(cmd, isolated, project).await?;
+        }
+        Some(Commands::Init { force }) => {
             commands::init::execute(force).await?;
         }
-        Commands::Config { command } => {
+        Some(Commands::Config { command }) => {
             commands::config::execute(command).await?;
         }
     }

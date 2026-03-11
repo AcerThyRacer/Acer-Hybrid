@@ -1,0 +1,7 @@
+name = "local-proxy"
+type = "provider"
+description = "Example OpenAI-compatible provider plugin"
+
+[provider]
+base_url = "http://localhost:9000/v1"
+api_key_env = "LOCAL_PROXY_API_KEY"

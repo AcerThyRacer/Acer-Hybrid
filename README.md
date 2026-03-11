@@ -10,8 +10,16 @@ Route requests across local and cloud models, enforce security policies, redact 
 - 🔐 **Encrypted Secrets Vault** - Securely store API keys with AES-256-GCM encryption
 - 🛡️ **Policy Engine** - Enforce per-project rules for cost, models, and content
 - 🔍 **PII Redaction** - Automatic detection and redaction of sensitive data
+- ♻️ **Prompt Cache & Replay** - Reuse prior runs and replay traces for debugging
 - 📊 **Trace Store** - SQLite-based logging of every interaction
 - 🌐 **Local API Gateway** - OpenAI-compatible endpoint for IDEs and tools
+- 🧪 **Workflow Engine** - Execute repeatable YAML or TOML automation flows
+- 🔒 **Tool Sandbox** - Gate shell commands through per-project policy rules
+- 📺 **TUI Dashboard** - Inspect requests, latency, cost, and failures in real time
+- 🌍 **Web Dashboard API** - Inspect stats and runs from `/dashboard`, `/api/stats`, and `/api/runs`
+- 🔌 **Plugin Manifests** - Load custom OpenAI-compatible providers and workflow plugins
+- 🏁 **Benchmark Mode** - Compare models on latency, token usage, cost, and output previews
+- 👥 **Policy Packs** - Share and activate team policy profiles from `policy-packs/`
 - 🖥️ **CLI & Daemon** - Use interactively or run as a background service
 
 ## Quick Start
@@ -26,6 +34,7 @@ cargo build --release
 
 # The binaries will be in target/release/
 # - acer (CLI)
+# - hybrid (dashboard-first CLI alias)
 # - acerd (daemon)
 ```
 
@@ -42,6 +51,12 @@ acer doctor
 ### Basic Usage
 
 ```bash
+# Open the live dashboard from any directory
+acer
+
+# Same dashboard via the hybrid alias
+hybrid
+
 # Ask a question (uses Ollama by default)
 acer ask "Explain Rust ownership"
 
@@ -53,6 +68,18 @@ acer models
 
 # View usage statistics
 acer stats
+
+# Open the live dashboard explicitly
+acer dashboard
+
+# Run a sandboxed command
+acer sandbox --isolated -- rg TODO .
+
+# Compare models directly
+acer benchmark "Summarize this module" --model llama2 --model openai:gpt-3.5-turbo
+
+# List plugin manifests
+acer plugins list
 ```
 
 ### Configure Cloud Providers
@@ -121,6 +148,10 @@ acer ask --model gpt-4 "Hello, GPT-4!"
 | `acer logs` | View recent runs |
 | `acer trace <run-id>` | Inspect a specific run |
 | `acer stats` | Show usage statistics |
+| `acer dashboard` | Open the terminal dashboard |
+| `acer sandbox -- <cmd>` | Run a command under policy control |
+| `acer benchmark <prompt> --model ...` | Compare multiple models |
+| `acer plugins list` | List installed plugins |
 
 ### Gateway & Daemon
 
@@ -130,6 +161,17 @@ acer ask --model gpt-4 "Hello, GPT-4!"
 | `acer daemon start` | Start the background daemon |
 | `acer daemon stop` | Stop the daemon |
 | `acer daemon status` | Check daemon status |
+
+### Workflow Automation
+
+| Command | Description |
+|---------|-------------|
+| `acer run <workflow>` | Execute a workflow from YAML or TOML |
+| `acer trace <run-id> --replay` | Replay a stored request |
+| `acer trace <run-id> --diff-with <other>` | Compare trace outputs |
+| `acer trace <run-id> --export out.json` | Export a run or DB snapshot |
+| `acer policy packs` | List installed policy packs |
+| `acer policy activate <name>` | Activate a shared profile |
 
 ## Configuration
 
@@ -144,6 +186,14 @@ default_model = "llama2"
 [providers.openai]
 enabled = true
 default_model = "gpt-3.5-turbo"
+
+[providers.anthropic]
+enabled = false
+default_model = "claude-3-sonnet-20240229"
+
+[providers.gemini]
+enabled = false
+default_model = "gemini-1.5-flash"
 
 [gateway]
 host = "127.0.0.1"
@@ -194,6 +244,12 @@ curl http://localhost:8080/v1/chat/completions \
 # Configure your IDE or tool to use http://localhost:8080
 ```
 
+Browser dashboard:
+
+```text
+http://localhost:8080/dashboard
+```
+
 ## Security Features
 
 ### PII Redaction
@@ -235,27 +291,33 @@ cargo run --bin acerd
 ## Roadmap
 
 ### Phase 1 (Current)
-- [x] CLI skeleton
-- [x] Provider abstraction (Ollama, OpenAI, Anthropic, Gemini)
+- [x] CLI
+- [x] Provider abstraction and routing
 - [x] Encrypted secrets vault
-- [x] Policy engine
-- [x] SQLite trace store
+- [x] Policy engine and redaction
+- [x] SQLite trace store with cost/latency logging
 - [x] Local API gateway
 - [x] Daemon
 
-### Phase 2 (Planned)
-- [ ] Workflow runner (YAML/TOML)
-- [ ] Model routing rules
-- [ ] TUI dashboard
-- [ ] Prompt replay/diff
-- [ ] Export to JSON/SQLite
+### Phase 2 (Implemented)
+- [x] Workflow runner (YAML/TOML)
+- [x] Model routing rules
+- [x] TUI dashboard
+- [x] Prompt replay/diff
+- [x] Export to JSON/SQLite
 
 ### Phase 3 (Future)
-- [ ] Tool sandbox
-- [ ] Plugin SDK
-- [ ] Web dashboard
-- [ ] Team profiles
-- [ ] Benchmark mode
+- [x] Tool sandbox
+- [x] Plugin SDK
+- [x] Web dashboard
+- [x] Team profiles / policy packs
+- [x] Benchmark mode
+
+### Phase 4 (Platform Hardening)
+- [x] Shared policy-pack activation
+- [x] Browser and TUI observability surfaces
+- [x] External provider and workflow plugin manifests
+- [x] Benchmark-driven model comparison
 
 ## License
 

@@ -8,7 +8,7 @@ authors.workspace = true
 [dependencies]
 acer-core.workspace = true
 
-sqlx.workspace = true
+sqlx = { workspace = true, features = ["macros"] }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

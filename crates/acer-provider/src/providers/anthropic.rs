@@ -1,7 +1,11 @@
 //! Anthropic provider implementation
 
+use crate::http::{build_http_client, send_with_retries};
 use crate::Provider;
-use acer_core::{AcerError, Model, ModelRequest, ModelResponse, ProviderType, Result, TokenUsage};
+use acer_core::{
+    AcerError, Model, ModelRequest, ModelResponse, ProviderHttpConfig, ProviderType, Result,
+    TokenUsage,
+};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -11,13 +15,19 @@ use std::time::Instant;
 pub struct AnthropicProvider {
     api_key: String,
     client: Client,
+    retry_attempts: u32,
 }
 
 impl AnthropicProvider {
     pub fn new(api_key: String) -> Self {
+        Self::with_http_config(api_key, ProviderHttpConfig::default())
+    }
+
+    pub fn with_http_config(api_key: String, http_config: ProviderHttpConfig) -> Self {
         Self {
             api_key,
-            client: Client::new(),
+            client: build_http_client(&http_config),
+            retry_attempts: http_config.retry_attempts,
         }
     }
 }
@@ -66,12 +76,12 @@ impl Provider for AnthropicProvider {
         let start = Instant::now();
 
         // Extract system message if present
-        let (system, messages): (Vec<_>, Vec<_>) = request.messages.into_iter()
+        let (system, messages): (Vec<_>, Vec<_>) = request
+            .messages
+            .into_iter()
             .partition(|m| matches!(m.role, acer_core::MessageRole::System));
 
-        let system_text = system.first()
-            .map(|m| m.content.as_str())
-            .unwrap_or("");
+        let system_text = system.first().map(|m| m.content.as_str()).unwrap_or("");
 
         #[derive(Serialize)]
         struct AnthropicRequest {
@@ -91,39 +101,52 @@ impl Provider for AnthropicProvider {
 
         let anthropic_request = AnthropicRequest {
             model: request.model.clone(),
-            messages: messages.into_iter().map(|m| AnthropicMessage {
-                role: match m.role {
-                    acer_core::MessageRole::User => "user".to_string(),
-                    acer_core::MessageRole::Assistant => "assistant".to_string(),
-                    _ => "user".to_string(),
-                },
-                content: m.content,
-            }).collect(),
+            messages: messages
+                .into_iter()
+                .map(|m| AnthropicMessage {
+                    role: match m.role {
+                        acer_core::MessageRole::User => "user".to_string(),
+                        acer_core::MessageRole::Assistant => "assistant".to_string(),
+                        _ => "user".to_string(),
+                    },
+                    content: m.content,
+                })
+                .collect(),
             system: system_text.to_string(),
             max_tokens: request.max_tokens.or(Some(4096)),
         };
 
-        let response = self.client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("Content-Type", "application/json")
-            .json(&anthropic_request)
-            .send()
-            .await
-            .map_err(|e| AcerError::Http(e.to_string()))?;
+        let response = send_with_retries(
+            || {
+                self.client
+                    .post("https://api.anthropic.com/v1/messages")
+                    .header("x-api-key", &self.api_key)
+                    .header("anthropic-version", "2023-06-01")
+                    .header("Content-Type", "application/json")
+                    .json(&anthropic_request)
+            },
+            self.retry_attempts,
+            "Anthropic completion",
+        )
+        .await?;
 
         if response.status() == 401 {
             return Err(AcerError::Auth("Invalid Anthropic API key".to_string()));
         }
 
         if response.status() == 429 {
-            return Err(AcerError::RateLimited("Anthropic rate limit exceeded".to_string()));
+            return Err(AcerError::RateLimited(
+                "Anthropic rate limit exceeded".to_string(),
+            ));
         }
 
         if !response.status().is_success() {
+            let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(AcerError::Provider(format!("Anthropic error: {}", error_text)));
+            return Err(AcerError::Provider(format!(
+                "Anthropic completion failed with status {}: {}",
+                status, error_text
+            )));
         }
 
         #[derive(Deserialize)]
@@ -151,7 +174,8 @@ impl Provider for AnthropicProvider {
             .await
             .map_err(|e| AcerError::Http(e.to_string()))?;
 
-        let content = data.content
+        let content = data
+            .content
             .first()
             .and_then(|c| c.text.clone())
             .unwrap_or_default();

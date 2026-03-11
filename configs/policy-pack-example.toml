@@ -1,0 +1,9 @@
+[default]
+max_cost_usd = 0.03
+allow_remote = true
+redact_pii = true
+require_confirmation = true
+
+[projects.production]
+allow_remote = false
+max_cost_usd = 0.0

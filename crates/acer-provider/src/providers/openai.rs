@@ -1,7 +1,11 @@
 //! OpenAI provider implementation
 
-use crate::{Provider, ProviderConfig};
-use acer_core::{AcerError, Model, ModelRequest, ModelResponse, ProviderType, Result, TokenUsage};
+use crate::http::{build_http_client, send_with_retries};
+use crate::Provider;
+use acer_core::{
+    AcerError, Model, ModelRequest, ModelResponse, ProviderHttpConfig, ProviderType, Result,
+    TokenUsage,
+};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -12,22 +16,37 @@ pub struct OpenAIProvider {
     api_key: String,
     client: Client,
     base_url: String,
+    retry_attempts: u32,
 }
 
 impl OpenAIProvider {
     pub fn new(api_key: String) -> Self {
+        Self::with_http_config(api_key, ProviderHttpConfig::default())
+    }
+
+    pub fn with_http_config(api_key: String, http_config: ProviderHttpConfig) -> Self {
         Self {
             api_key,
-            client: Client::new(),
+            client: build_http_client(&http_config),
             base_url: "https://api.openai.com/v1".to_string(),
+            retry_attempts: http_config.retry_attempts,
         }
     }
 
     pub fn with_base_url(api_key: String, base_url: String) -> Self {
+        Self::with_base_url_and_config(api_key, base_url, ProviderHttpConfig::default())
+    }
+
+    pub fn with_base_url_and_config(
+        api_key: String,
+        base_url: String,
+        http_config: ProviderHttpConfig,
+    ) -> Self {
         Self {
             api_key,
-            client: Client::new(),
+            client: build_http_client(&http_config),
             base_url,
+            retry_attempts: http_config.retry_attempts,
         }
     }
 }
@@ -39,7 +58,22 @@ impl Provider for OpenAIProvider {
     }
 
     async fn is_available(&self) -> bool {
-        !self.api_key.is_empty()
+        if self.api_key.trim().is_empty() {
+            return false;
+        }
+
+        send_with_retries(
+            || {
+                self.client
+                    .get(format!("{}/models", self.base_url))
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+            },
+            0,
+            "OpenAI availability check",
+        )
+        .await
+        .map(|response| response.status().is_success())
+        .unwrap_or(false)
     }
 
     async fn list_models(&self) -> Result<Vec<Model>> {
@@ -51,15 +85,18 @@ impl Provider for OpenAIProvider {
         #[derive(Deserialize)]
         struct OpenAIModel {
             id: String,
-            owned_by: String,
         }
 
-        let response = self.client
-            .get(format!("{}/models", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .send()
-            .await
-            .map_err(|e| AcerError::Http(e.to_string()))?;
+        let response = send_with_retries(
+            || {
+                self.client
+                    .get(format!("{}/models", self.base_url))
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+            },
+            self.retry_attempts,
+            "OpenAI list models",
+        )
+        .await?;
 
         if !response.status().is_success() {
             return Ok(Vec::new());
@@ -70,14 +107,21 @@ impl Provider for OpenAIProvider {
             .await
             .map_err(|e| AcerError::Http(e.to_string()))?;
 
-        Ok(data.data.into_iter().map(|m| Model {
-            id: m.id.clone(),
-            name: m.id,
-            provider: ProviderType::OpenAI,
-            is_local: false,
-            context_window: None,
-            cost_per_1k_tokens: get_model_cost(&m.id),
-        }).collect())
+        Ok(data
+            .data
+            .into_iter()
+            .map(|m| {
+                let cost = get_model_cost(&m.id);
+                Model {
+                    id: m.id.clone(),
+                    name: m.id,
+                    provider: ProviderType::OpenAI,
+                    is_local: false,
+                    context_window: None,
+                    cost_per_1k_tokens: cost,
+                }
+            })
+            .collect())
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse> {
@@ -101,39 +145,53 @@ impl Provider for OpenAIProvider {
 
         let openai_request = OpenAIRequest {
             model: request.model.clone(),
-            messages: request.messages.into_iter().map(|m| OpenAIMessage {
-                role: match m.role {
-                    acer_core::MessageRole::System => "system".to_string(),
-                    acer_core::MessageRole::User => "user".to_string(),
-                    acer_core::MessageRole::Assistant => "assistant".to_string(),
-                    acer_core::MessageRole::Tool => "tool".to_string(),
-                },
-                content: m.content,
-            }).collect(),
+            messages: request
+                .messages
+                .into_iter()
+                .map(|m| OpenAIMessage {
+                    role: match m.role {
+                        acer_core::MessageRole::System => "system".to_string(),
+                        acer_core::MessageRole::User => "user".to_string(),
+                        acer_core::MessageRole::Assistant => "assistant".to_string(),
+                        acer_core::MessageRole::Tool => "tool".to_string(),
+                    },
+                    content: m.content,
+                })
+                .collect(),
             temperature: request.temperature,
             max_tokens: request.max_tokens,
         };
 
-        let response = self.client
-            .post(format!("{}/chat/completions", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&openai_request)
-            .send()
-            .await
-            .map_err(|e| AcerError::Http(e.to_string()))?;
+        let response = send_with_retries(
+            || {
+                self.client
+                    .post(format!("{}/chat/completions", self.base_url))
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json")
+                    .json(&openai_request)
+            },
+            self.retry_attempts,
+            "OpenAI completion",
+        )
+        .await?;
 
         if response.status() == 401 {
             return Err(AcerError::Auth("Invalid OpenAI API key".to_string()));
         }
 
         if response.status() == 429 {
-            return Err(AcerError::RateLimited("OpenAI rate limit exceeded".to_string()));
+            return Err(AcerError::RateLimited(
+                "OpenAI rate limit exceeded".to_string(),
+            ));
         }
 
         if !response.status().is_success() {
+            let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(AcerError::Provider(format!("OpenAI error: {}", error_text)));
+            return Err(AcerError::Provider(format!(
+                "OpenAI completion failed with status {}: {}",
+                status, error_text
+            )));
         }
 
         #[derive(Deserialize)]
@@ -167,7 +225,8 @@ impl Provider for OpenAIProvider {
             .await
             .map_err(|e| AcerError::Http(e.to_string()))?;
 
-        let content = data.choices
+        let content = data
+            .choices
             .first()
             .and_then(|c| c.message.content.clone())
             .unwrap_or_default();

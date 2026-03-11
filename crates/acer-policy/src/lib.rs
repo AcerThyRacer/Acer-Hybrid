@@ -1,9 +1,9 @@
 //! Policy engine for Acer Hybrid
 
 mod engine;
-mod rules;
 mod redaction;
+mod rules;
 
 pub use engine::PolicyEngine;
-pub use rules::{PolicyRules, PolicyConfig};
 pub use redaction::{RedactionEngine, RedactionPattern};
+pub use rules::{PolicyConfig, PolicyRules};

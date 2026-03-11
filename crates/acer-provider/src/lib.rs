@@ -1,9 +1,10 @@
 //! Provider abstraction for Acer Hybrid
 
+mod http;
 mod providers;
-mod traits;
 mod router;
+mod traits;
 
 pub use providers::*;
-pub use traits::*;
 pub use router::*;
+pub use traits::*;
