@@ -250,6 +250,10 @@ Browser dashboard:
 http://localhost:8080/dashboard
 ```
 
+## License
+
+This project is licensed under the GNU General Public License v3.0. See `LICENSE`.
+
 ## Security Features
 
 ### PII Redaction
