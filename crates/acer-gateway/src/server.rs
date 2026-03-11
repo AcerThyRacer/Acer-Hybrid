@@ -211,7 +211,7 @@ impl GatewayServer {
         tracing::info!("Starting gateway server on {}", self.addr);
 
         let listener = tokio::net::TcpListener::bind(self.addr).await?;
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
             .with_graceful_shutdown(shutdown_signal())
             .await?;
 
@@ -316,6 +316,7 @@ async fn track_requests_middleware(
 
 async fn rate_limit_middleware(
     State(state): State<GatewayState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -324,9 +325,22 @@ async fn rate_limit_middleware(
         return next.run(request).await;
     }
 
+    // Use authorized auth token or IP address as the rate limit key
+    let key = if is_authorized(&state, request.headers()) {
+        request
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok())
+            .or_else(|| request.headers().get("x-api-key").and_then(|h| h.to_str().ok()))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| addr.ip().to_string())
+    } else {
+        addr.ip().to_string()
+    };
+
     let allowed = {
         let mut limiter = state.rate_limiter.lock().await;
-        limiter.check()
+        limiter.check(&key)
     };
 
     if allowed {
