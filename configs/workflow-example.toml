@@ -1,0 +1,38 @@
+# Example workflow for secure code review
+name = "secure-code-review"
+description = "Scan code for secrets and get AI review"
+
+[[steps]]
+name = "scan_secrets"
+type = "command"
+command = "git diff HEAD~1"
+
+[[steps]]
+name = "redact_sensitive"
+type = "redact"
+patterns = ["api_key", "secret", "password"]
+
+[[steps]]
+name = "send_to_model"
+type = "llm"
+model = "llama2"
+prompt = """
+Review this code diff for:
+1. Security issues
+2. Code quality
+3. Potential bugs
+
+Diff:
+{scan_secrets}
+"""
+
+[[steps]]
+name = "validate_output"
+type = "validate"
+rules = ["no_secrets_in_output"]
+
+[[steps]]
+name = "save_report"
+type = "output"
+format = "markdown"
+path = "review-report.md"

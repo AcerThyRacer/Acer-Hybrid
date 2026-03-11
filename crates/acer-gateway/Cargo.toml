@@ -1,0 +1,21 @@
+[package]
+name = "acer-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+acer-core.workspace = true
+acer-provider.workspace = true
+acer-policy.workspace = true
+acer-trace.workspace = true
+
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+thiserror.workspace = true

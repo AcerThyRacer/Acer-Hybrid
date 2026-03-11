@@ -1,0 +1,70 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/acer-cli",
+    "crates/acerd",
+    "crates/acer-core",
+    "crates/acer-provider",
+    "crates/acer-policy",
+    "crates/acer-vault",
+    "crates/acer-trace",
+    "crates/acer-gateway",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Acer Hybrid Team"]
+repository = "https://github.com/acer-hybrid/acer-hybrid"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# CLI
+clap = { version = "4.4", features = ["derive", "env"] }
+
+# HTTP client/server
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite"] }
+
+# Crypto
+ring = "0.17"
+base64 = "0.21"
+rand = "0.8"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Utils
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+sha2 = "0.10"
+hex = "0.4"
+dirs = "5.0"
+async-trait = "0.1"
+regex = "1.10"
+
+# Internal crates
+acer-core = { path = "crates/acer-core" }
+acer-provider = { path = "crates/acer-provider" }
+acer-policy = { path = "crates/acer-policy" }
+acer-vault = { path = "crates/acer-vault" }
+acer-trace = { path = "crates/acer-trace" }
+acer-gateway = { path = "crates/acer-gateway" }

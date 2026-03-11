@@ -1,0 +1,12 @@
+[default]
+max_cost_usd = 0.10
+allow_remote = true
+redact_pii = true
+require_confirmation = false
+
+# Example: Restrictive policy for a fintech project
+# [projects.fintech-app]
+# allow_remote = false
+# allow_tools = ["grep", "rg", "git diff"]
+# block_patterns = ["customer_ssn", "api_secret"]
+# max_cost_usd = 0.05

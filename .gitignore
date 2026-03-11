@@ -1,0 +1,7 @@
+/target
+/Cargo.lock
+*.db
+*.db-journal
+*.pid
+vault.json
+config.toml

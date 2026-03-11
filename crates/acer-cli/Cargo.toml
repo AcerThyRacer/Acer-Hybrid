@@ -1,0 +1,30 @@
+[package]
+name = "acer-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "acer"
+path = "src/main.rs"
+
+[dependencies]
+acer-core.workspace = true
+acer-provider.workspace = true
+acer-policy.workspace = true
+acer-vault.workspace = true
+acer-trace.workspace = true
+acer-gateway.workspace = true
+
+clap.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+rpassword = "7.3"
