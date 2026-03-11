@@ -28,11 +28,11 @@ use std::time::{Duration as StdDuration, Instant};
 
 const SPLASH_MS: u64 = 1300;
 const ART_LINES: [&str; 5] = [
-    "    _    ____ _____ ____        _   _ __   ______  ____  ___ ____ ",
-    "   / \\  / ___| ____|  _ \\      | | | |\\ \\ / / __ )|  _ \\|_ _|  _ \\",
-    "  / _ \\| |   |  _| | |_) |_____| |_| | \\ V /|  _ \\| |_) || || | | |",
-    " / ___ \\ |___| |___|  _ <_____|  _  |  | | | |_) |  _ < | || |_| |",
-    "/_/   \\_\\____|_____|_| \\_\\    |_| |_|  |_| |____/|_| \\_\\___|____/ ",
+    "   ___  ________________  __  ____  _____  ___  ________",
+    "  / _ |/ ___/ __/ _ \\___// / / /\\ \\/ / _ )/ _ \\/  _/ __ \\",
+    " / __ / /__/ _// , _/___/ /_/ /  \\  / _  / , _// // /_/ /",
+    "/_/ |_\\___/___/_/|_|    \\____/   /_/____/_/|_/___/\\____/ ",
+    "                                                         ",
 ];
 
 const MENU: [MenuItem; 7] = [
@@ -72,6 +72,106 @@ enum UiPhase {
     Main,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Theme {
+    Rave,
+    Matrix,
+    Cyberpunk,
+    Monochrome,
+}
+
+impl Theme {
+    fn next(self) -> Self {
+        match self {
+            Theme::Rave => Theme::Matrix,
+            Theme::Matrix => Theme::Cyberpunk,
+            Theme::Cyberpunk => Theme::Monochrome,
+            Theme::Monochrome => Theme::Rave,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Theme::Rave => "Rave",
+            Theme::Matrix => "Matrix",
+            Theme::Cyberpunk => "Cyberpunk",
+            Theme::Monochrome => "Monochrome",
+        }
+    }
+
+    fn primary(self) -> Color {
+        match self {
+            Theme::Rave => Color::Magenta,
+            Theme::Matrix => Color::LightGreen,
+            Theme::Cyberpunk => Color::Cyan,
+            Theme::Monochrome => Color::White,
+        }
+    }
+
+    fn secondary(self) -> Color {
+        match self {
+            Theme::Rave => Color::Cyan,
+            Theme::Matrix => Color::Green,
+            Theme::Cyberpunk => Color::Magenta,
+            Theme::Monochrome => Color::Gray,
+        }
+    }
+
+    fn highlight_bg(self) -> Color {
+        match self {
+            Theme::Rave => Color::Rgb(64, 23, 64),
+            Theme::Matrix => Color::Rgb(20, 64, 20),
+            Theme::Cyberpunk => Color::Rgb(23, 41, 64),
+            Theme::Monochrome => Color::Rgb(40, 40, 40),
+        }
+    }
+
+    fn highlight_fg(self) -> Color {
+        match self {
+            Theme::Rave => Color::Yellow,
+            Theme::Matrix => Color::LightGreen,
+            Theme::Cyberpunk => Color::LightMagenta,
+            Theme::Monochrome => Color::White,
+        }
+    }
+
+    fn text(self) -> Color {
+        match self {
+            Theme::Rave => Color::White,
+            Theme::Matrix => Color::LightGreen,
+            Theme::Cyberpunk => Color::LightCyan,
+            Theme::Monochrome => Color::White,
+        }
+    }
+
+    fn muted(self) -> Color {
+        match self {
+            Theme::Rave => Color::DarkGray,
+            Theme::Matrix => Color::DarkGray,
+            Theme::Cyberpunk => Color::DarkGray,
+            Theme::Monochrome => Color::DarkGray,
+        }
+    }
+
+    fn success(self) -> Color {
+        match self {
+            Theme::Rave => Color::LightGreen,
+            Theme::Matrix => Color::LightGreen,
+            Theme::Cyberpunk => Color::Green,
+            Theme::Monochrome => Color::White,
+        }
+    }
+
+    fn error(self) -> Color {
+        match self {
+            Theme::Rave => Color::LightRed,
+            Theme::Matrix => Color::LightGreen,
+            Theme::Cyberpunk => Color::LightRed,
+            Theme::Monochrome => Color::Gray,
+        }
+    }
+}
+
 #[derive(Default)]
 struct DashboardData {
     stats: UsageStats,
@@ -94,6 +194,7 @@ struct App {
     data: DashboardData,
     status: String,
     last_area: Rect,
+    theme: Theme,
 }
 
 #[derive(Clone, Copy)]
@@ -177,6 +278,7 @@ impl App {
             data: DashboardData::default(),
             status: "Booting control surface...".to_string(),
             last_area: Rect::default(),
+            theme: Theme::Rave,
         }
     }
 
@@ -321,6 +423,10 @@ async fn handle_key_event(app: &mut App, code: KeyCode) -> Result<bool> {
         KeyCode::Home => app.set_selected(0),
         KeyCode::End => app.set_selected(MENU.len() - 1),
         KeyCode::Enter | KeyCode::Char('r') => app.refresh().await,
+        KeyCode::Char('t') | KeyCode::Char('c') => {
+            app.theme = app.theme.next();
+            app.status = format!("Theme changed to {}.", app.theme.name());
+        }
         _ => {}
     }
 
@@ -373,7 +479,7 @@ fn render_splash(frame: &mut ratatui::Frame<'_>, app: &App) {
         lines.push(Line::from(Span::styled(
             rendered,
             Style::default()
-                .fg(Color::Cyan)
+                .fg(app.theme.primary())
                 .add_modifier(Modifier::BOLD),
         )));
     }
@@ -382,18 +488,17 @@ fn render_splash(frame: &mut ratatui::Frame<'_>, app: &App) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         spinner[((elapsed_ms / 90) as usize) % spinner.len()],
-        Style::default().fg(Color::Yellow),
+        Style::default().fg(app.theme.secondary()),
     )));
     lines.push(Line::from(Span::styled(
         "Launching the local-first control surface. Press any key to skip.",
-        Style::default().fg(Color::Gray),
+        Style::default().fg(app.theme.muted()),
     )));
 
     let splash = Paragraph::new(lines).alignment(Alignment::Center).block(
         Block::default()
-            .title(" ACER-HYBRID ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray)),
+            .title(Span::styled(" ACER-HYBRID ", Style::default().fg(app.theme.primary())))
+            .borders(Borders::NONE),
     );
 
     let layout = Layout::default()
@@ -484,26 +589,26 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
     let art = if area.width >= 72 {
         vec![
             Line::from(Span::styled(
-                "    _    ____ _____ ____        _   _ __   ______  ____  ___ ____ ",
+                "   ___  ________________  __  ____  _____  ___  ________",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(app.theme.primary())
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
-                "   / \\  / ___| ____|  _ \\      | | | |\\ \\ / / __ )|  _ \\|_ _|  _ \\",
-                Style::default().fg(Color::Cyan),
+                "  / _ |/ ___/ __/ _ \\___// / / /\\ \\/ / _ )/ _ \\/  _/ __ \\",
+                Style::default().fg(app.theme.primary()),
             )),
             Line::from(Span::styled(
-                "  / _ \\| |   |  _| | |_) |_____| |_| | \\ V /|  _ \\| |_) || || | | |",
-                Style::default().fg(Color::Cyan),
+                " / __ / /__/ _// , _/___/ /_/ /  \\  / _  / , _// // /_/ /",
+                Style::default().fg(app.theme.primary()),
             )),
             Line::from(Span::styled(
-                " / ___ \\ |___| |___|  _ <_____|  _  |  | | | |_) |  _ < | || |_| |",
-                Style::default().fg(Color::Cyan),
+                "/_/ |_\\___/___/_/|_|    \\____/   /_/____/_/|_/___/\\____/ ",
+                Style::default().fg(app.theme.primary()),
             )),
             Line::from(Span::styled(
-                "/_/   \\_\\____|_____|_| \\_\\    |_| |_|  |_| |____/|_| \\_\\___|____/ ",
-                Style::default().fg(Color::Cyan),
+                "                                                         ",
+                Style::default().fg(app.theme.primary()),
             )),
             Line::from(Span::styled(
                 format!(
@@ -514,7 +619,7 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
                         .clone()
                         .unwrap_or_else(|| "not yet".to_string())
                 ),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(app.theme.secondary()),
             )),
         ]
     } else {
@@ -522,20 +627,20 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
             Line::from(Span::styled(
                 "ACER-HYBRID",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(app.theme.primary())
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
                 format!("[{}] local-first control surface", pulse),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(app.theme.secondary()),
             )),
         ]
     };
 
     let widget = Paragraph::new(art).block(
         Block::default()
-            .title(" Brand Console ")
-            .borders(Borders::ALL),
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(app.theme.muted())),
     );
     frame.render_widget(widget, area);
 }
@@ -545,8 +650,8 @@ fn render_menu(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
         .iter()
         .map(|item| {
             ListItem::new(Line::from(vec![
-                Span::styled("> ", Style::default().fg(Color::DarkGray)),
-                Span::styled(item.title, Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("  ", Style::default()),
+                Span::styled(item.title, Style::default().fg(app.theme.text())),
             ]))
         })
         .collect::<Vec<_>>();
@@ -554,16 +659,16 @@ fn render_menu(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
     let menu = List::new(items)
         .block(
             Block::default()
-                .title(" Command Palette ")
-                .borders(Borders::ALL),
+                .title(Span::styled(" MENU ", Style::default().fg(app.theme.primary())))
+                .borders(Borders::NONE),
         )
         .highlight_style(
             Style::default()
-                .bg(Color::Rgb(23, 41, 64))
-                .fg(Color::White)
+                .bg(app.theme.highlight_bg())
+                .fg(app.theme.highlight_fg())
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol(">> ");
+        .highlight_symbol("> ");
 
     frame.render_stateful_widget(menu, area, &mut app.menu_state);
 }
@@ -582,7 +687,12 @@ fn render_detail(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
     let title = format!(" {} ", MENU[app.selected].title);
     let widget = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .block(Block::default().title(title).borders(Borders::ALL));
+        .block(
+            Block::default()
+                .title(Span::styled(title, Style::default().fg(app.theme.primary())))
+                .borders(Borders::LEFT)
+                .border_style(Style::default().fg(app.theme.muted())),
+        );
     frame.render_widget(widget, area);
 }
 
@@ -595,59 +705,70 @@ fn render_footer(
 ) {
     let sections = footer_inner(area);
     let status = Paragraph::new(Line::from(vec![
-        Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
-        Span::raw(app.status.clone()),
+        Span::styled("STATUS: ", Style::default().fg(app.theme.primary())),
+        Span::styled(app.status.clone(), Style::default().fg(app.theme.text())),
         Span::styled(
-            "  |  arrows/mouse choose panel  |  r refresh  |  q quit",
-            Style::default().fg(Color::Gray),
+            "  |  ↑/↓: navigate  |  r: refresh  |  t: theme  |  q: quit",
+            Style::default().fg(app.theme.muted()),
         ),
     ]))
-    .block(Block::default().borders(Borders::ALL));
+    .block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(app.theme.muted())),
+    );
     frame.render_widget(status, sections[0]);
 
-    frame.render_widget(button("Refresh", Color::Green), refresh_button);
-    frame.render_widget(button("Quit", Color::Red), quit_button);
+    frame.render_widget(button("REFRESH", app.theme.success(), app), refresh_button);
+    frame.render_widget(button("QUIT", app.theme.error(), app), quit_button);
 }
 
-fn button(label: &str, color: Color) -> Paragraph<'static> {
+fn button(label: &str, color: Color, app: &App) -> Paragraph<'static> {
     Paragraph::new(Line::from(Span::styled(
-        format!("[ {} ]", label),
+        format!(" {}", label),
         Style::default().fg(color).add_modifier(Modifier::BOLD),
     )))
     .alignment(Alignment::Center)
-    .block(Block::default().borders(Borders::ALL))
+    .block(
+        Block::default()
+            .borders(Borders::TOP | Borders::LEFT)
+            .border_style(Style::default().fg(app.theme.muted())),
+    )
 }
 
 fn detail_command_center(app: &App) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
             MENU[0].description,
-            Style::default().fg(Color::Gray),
+            Style::default().fg(app.theme.muted()),
         )),
         Line::from(""),
-        metric_line("Requests (24h)", app.data.stats.total_requests.to_string()),
+        metric_line("Requests (24h)", app.data.stats.total_requests.to_string(), app.theme),
         metric_line(
             "Success / Fail",
             format!(
                 "{} / {}",
                 app.data.stats.successful_requests, app.data.stats.failed_requests
             ),
+            app.theme
         ),
-        metric_line("Tokens (24h)", app.data.stats.total_tokens.to_string()),
+        metric_line("Tokens (24h)", app.data.stats.total_tokens.to_string(), app.theme),
         metric_line(
             "Estimated cost",
             format!("${:.4}", app.data.stats.total_cost_usd),
+            app.theme
         ),
         metric_line(
             "Avg latency",
             format!("{:.0} ms", app.data.stats.avg_latency_ms),
+            app.theme
         ),
-        metric_line("Models loaded", app.data.models.len().to_string()),
-        metric_line("Plugins loaded", app.data.plugins.len().to_string()),
+        metric_line("Models loaded", app.data.models.len().to_string(), app.theme),
+        metric_line("Plugins loaded", app.data.plugins.len().to_string(), app.theme),
         Line::from(""),
         Line::from(Span::styled(
             "Open the palette with arrows or click a panel on the left.",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme.secondary()),
         )),
     ];
 
@@ -655,7 +776,7 @@ fn detail_command_center(app: &App) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Warnings",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default().fg(app.theme.error()).add_modifier(Modifier::BOLD),
         )));
         for issue in app.data.issues.iter().take(4) {
             lines.push(Line::from(format!("- {}", issue)));
@@ -669,7 +790,7 @@ fn detail_recent_runs(app: &App) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
             MENU[1].description,
-            Style::default().fg(Color::Gray),
+            Style::default().fg(app.theme.muted()),
         )),
         Line::from(""),
     ];
@@ -701,7 +822,7 @@ fn detail_models(app: &App) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
             MENU[2].description,
-            Style::default().fg(Color::Gray),
+            Style::default().fg(app.theme.muted()),
         )),
         Line::from(""),
     ];
@@ -733,7 +854,7 @@ fn detail_providers(app: &App) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
             MENU[3].description,
-            Style::default().fg(Color::Gray),
+            Style::default().fg(app.theme.muted()),
         )),
         Line::from(""),
     ];
@@ -767,7 +888,7 @@ fn detail_policy(app: &App) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
             MENU[4].description,
-            Style::default().fg(Color::Gray),
+            Style::default().fg(app.theme.muted()),
         )),
         Line::from(""),
     ];
@@ -788,7 +909,7 @@ fn detail_plugins(app: &App) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
             MENU[5].description,
-            Style::default().fg(Color::Gray),
+            Style::default().fg(app.theme.muted()),
         )),
         Line::from(""),
     ];
@@ -822,7 +943,7 @@ fn detail_quick_start(app: &App) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
             MENU[6].description,
-            Style::default().fg(Color::Gray),
+            Style::default().fg(app.theme.muted()),
         )),
         Line::from(""),
         Line::from("Primary shortcuts"),
@@ -850,13 +971,13 @@ fn detail_quick_start(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
-fn metric_line(label: impl Into<String>, value: impl Into<String>) -> Line<'static> {
+fn metric_line(label: impl Into<String>, value: impl Into<String>, theme: Theme) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("{:<18}", label.into()),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted()),
         ),
-        Span::styled(value.into(), Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(value.into(), Style::default().fg(theme.text()).add_modifier(Modifier::BOLD)),
     ])
 }
 
